@@ -389,6 +389,59 @@ app.get('/health', (req, res) => {
 	});
 });
 
+// ══════════════════════════════════════════════
+// ENDPOINT PÚBLICO: Inventario para landing page
+// ══════════════════════════════════════════════
+app.get('/inventario-publico', async (req, res) => {
+	try {
+		res.header('Access-Control-Allow-Origin', '*');
+		res.header('Access-Control-Allow-Methods', 'GET');
+		res.header('Cache-Control', 'public, max-age=300');
+
+		const { data: neveras, error } = await supabase
+			.from('neveras')
+			.select(`
+				id,
+				nombre,
+				tipo,
+				capacidad_litros,
+				precio,
+				disponible,
+				uso_recomendado,
+				foto_url,
+				temperatura_min,
+				temperatura_max,
+				descripcion
+			`)
+			.eq('disponible', true)
+			.order('precio', { ascending: true });
+
+		if (error) throw error;
+
+		res.json({
+			ok: true,
+			total: neveras?.length || 0,
+			neveras: neveras || [],
+			actualizado: new Date().toISOString()
+		});
+
+	} catch (error) {
+		console.error('Error inventario-publico:', error);
+		res.status(500).json({ 
+			ok: false, 
+			neveras: [],
+			error: 'Error al obtener inventario'
+		});
+	}
+});
+
+// Preflight CORS para el endpoint anterior
+app.options('/inventario-publico', (req, res) => {
+	res.header('Access-Control-Allow-Origin', '*');
+	res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+	res.sendStatus(200);
+});
+
 process.on('uncaughtException', (error) => {
 	console.error('[UncaughtException]', error);
 });

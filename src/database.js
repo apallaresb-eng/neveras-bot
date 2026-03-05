@@ -473,6 +473,23 @@ async function obtenerConversacionesPorVendedor(telegramId) {
   }
 }
 
+// Obtener neveras disponibles para landing page
+const obtenerNeverasDisponibles = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('neveras')
+      .select('*')
+      .eq('disponible', true)
+      .order('precio', { ascending: true });
+    
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error obtenerNeverasDisponibles:', error);
+    return [];
+  }
+};
+
 // Exportar todas las funciones
 module.exports = {
   obtenerInventarioDisponible,
@@ -492,5 +509,6 @@ module.exports = {
   verificarDisponibilidadNevera,
   asignarVendedor,
   obtenerConversacionPorTelefono,
-  obtenerConversacionesPorVendedor
+  obtenerConversacionesPorVendedor,
+  obtenerNeverasDisponibles
 };
