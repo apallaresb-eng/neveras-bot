@@ -23,16 +23,20 @@ const extraerDatosMensaje = (body) => {
     const mediaUrl = body.MediaUrl0 || null;
     const mediaType= body.MediaContentType0 || null;
 
-    if (!telefono || !mensaje) return null;
+    // Permitir mensajes sin texto si tienen media (audio/imagen)
+    const tieneMedia = !!(body.MediaUrl0);
+    if (!telefono || (!mensaje && !tieneMedia)) return null;
 
     return {
       telefono,
-      mensaje,
+      mensaje: mensaje || '',
       nombre,
-      mediaUrl,
-      mediaType,
-      esAudio: mediaType && mediaType.includes('audio'),
-      esImagen: mediaType && mediaType.includes('image')
+      mediaUrl:  body.MediaUrl0  || null,
+      mediaType: body.MediaContentType0 || null,
+      esAudio:   !!(body.MediaContentType0 &&
+                  body.MediaContentType0.includes('audio')),
+      esImagen:  !!(body.MediaContentType0 &&
+                  body.MediaContentType0.includes('image'))
     };
   } catch (error) {
     console.error('Error extrayendo datos:', error);

@@ -216,6 +216,8 @@ app.get('/webhook', whatsapp.verificarWebhook);
 
 app.post('/webhook', async (req, res) => {
 	try {
+		console.log('Webhook recibido:', JSON.stringify(req.body));
+
 		// Respuesta vacía — Twilio no envía nada al usuario
 		res.setHeader('Content-Type', 'text/xml');
 		res.status(200).send('<Response></Response>');
