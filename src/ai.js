@@ -56,7 +56,7 @@ async function procesarMensaje(telefono, mensajeCliente, contextoInventario = ''
     const inventarioFormateado = formatearInventarioParaIA(inventarioDisponible);
     
     // Construir el prompt del sistema completo con inventario
-     const systemPromptCompleto = `${SYSTEM_PROMPT}\n\n${inventarioFormateado}\n\n${contextoInventario}
+    const systemPrompt = `${SYSTEM_PROMPT}\n\n${inventarioFormateado}
 
     REGLAS CRITICAS SOBRE EL INVENTARIO:
     1. NUNCA digas que tienes algo que no esta en el inventario
@@ -75,14 +75,18 @@ async function procesarMensaje(telefono, mensajeCliente, contextoInventario = ''
       "Ahorita no tenemos stock disponible, pero
       constantemente nos llegan equipos nuevos.
       ¿Le puedo anotar para avisarle?"`;
+    const systemPromptCompleto = systemPrompt +
+      '\n\n' + (contextoInventario || '');
 
-    // Limitar historial para no exceder tokens de Groq
-    const historialLimitado = historialMensajes.slice(-20);
+    // Limitar y limpiar historial para no exceder tokens de Groq
+    const historialLimpio = (historialMensajes || [])
+      .slice(-20)
+      .filter(m => m && m.role && m.content);
     
     // Construir mensajes para la API
     const messages = [
       { role: 'system', content: systemPromptCompleto },
-      ...historialLimitado,
+      ...historialLimpio,
       { role: 'user', content: mensajeCliente }
     ];
     
