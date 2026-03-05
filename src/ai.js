@@ -50,13 +50,31 @@ REGLAS IMPORTANTES:
 - Responde SIEMPRE en español colombiano`;
 
 // 1. Procesar mensaje del cliente
-async function procesarMensaje(telefono, mensajeCliente, historialMensajes, inventarioDisponible, leadScore) {
+async function procesarMensaje(telefono, mensajeCliente, contextoInventario = '', historialMensajes, inventarioDisponible, leadScore) {
   try {
     // Formatear inventario para incluir en el prompt
     const inventarioFormateado = formatearInventarioParaIA(inventarioDisponible);
     
     // Construir el prompt del sistema completo con inventario
-    const systemPromptCompleto = `${SYSTEM_PROMPT}\n\n${inventarioFormateado}`;
+     const systemPromptCompleto = `${SYSTEM_PROMPT}\n\n${inventarioFormateado}\n\n${contextoInventario}
+
+    REGLAS CRITICAS SOBRE EL INVENTARIO:
+    1. NUNCA digas que tienes algo que no esta en el inventario
+    2. Si el inventario dice "No hay neveras disponibles",
+      dile al cliente honestamente que estas sin stock
+      en este momento y que puede dejar sus datos para
+      avisarle cuando llegue
+    3. Si el cliente pide medidas especificas (alto, ancho,
+      fondo) y no tienes una que coincida exactamente,
+      diselo y ofrece la mas cercana que SI tienes
+    4. Nunca inventes precios, capacidades ni medidas
+    5. Si no hay stock, no ofrezcas nada - se honesto
+    6. Solo recomienda neveras que aparezcan en el
+      inventario actual
+    7. Si el inventario esta vacio, di algo como:
+      "Ahorita no tenemos stock disponible, pero
+      constantemente nos llegan equipos nuevos.
+      ¿Le puedo anotar para avisarle?"`;
 
     // Limitar historial para no exceder tokens de Groq
     const historialLimitado = historialMensajes.slice(-20);

@@ -11,6 +11,42 @@ const telegram = require('./src/telegram');
 const escalacion = require('./src/escalacion');
 const envios = require('./src/envios');
 const followup = require('./src/followup');
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+	process.env.SUPABASE_URL,
+	process.env.SUPABASE_KEY
+);
+
+const obtenerContextoInventario = async () => {
+	try {
+		const { data: neveras, error } = await supabase
+			.from('neveras')
+			.select('nombre, tipo, capacidad_litros, precio, uso_recomendado, temperatura_min, temperatura_max, descripcion')
+			.eq('disponible', true);
+
+		if (error || !neveras || neveras.length === 0) {
+			return 'INVENTARIO ACTUAL: No hay neveras disponibles en este momento.';
+		}
+
+		const lista = neveras.map((n, i) => {
+			const temp = (n.temperatura_min != null && n.temperatura_max != null)
+				? `${n.temperatura_min}°C a ${n.temperatura_max}°C` : '';
+			const precio = n.precio
+				? `$${Number(n.precio).toLocaleString('es-CO')} COP` : 'consultar';
+			const capacidad = n.capacidad_litros
+				? `${n.capacidad_litros} litros` : '';
+
+			return `- ${n.nombre} | Tipo: ${n.tipo || 'N/A'} | ${capacidad} | Temperatura: ${temp} | Precio: ${precio} | Uso ideal: ${n.uso_recomendado || n.descripcion || 'N/A'}`;
+		}).join('\n');
+
+		return `INVENTARIO ACTUAL DISPONIBLE (solo esto existe, no inventes más):\n${lista}`;
+
+	} catch (err) {
+		console.error('Error obteniendo inventario para IA:', err);
+		return 'INVENTARIO ACTUAL: No se pudo consultar el stock en este momento.';
+	}
+};
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -273,10 +309,6 @@ app.post('/webhook', async (req, res) => {
 
 				if (transcripcion && transcripcion.length > 0) {
 					datos.mensaje = transcripcion;
-					await enviarMensaje(
-						datos.telefono,
-						`🎤 _Escuché: "${transcripcion}"_`
-					);
 				} else {
 					throw new Error('Sin transcripción');
 				}
@@ -359,12 +391,16 @@ app.post('/webhook', async (req, res) => {
 			return;
 		}
 
+		const contextoInventario = await obtenerContextoInventario();
+		console.log('Inventario para IA:', contextoInventario);
+
 		const { respuesta, intencionDetectada } = await ai.procesarMensaje(
 			datos.telefono,
 			datos.mensaje,
 			historial,
 			inventario,
-			conversacion.lead_score
+			conversacion.lead_score,
+			contextoInventario
 		);
 
 		const nuevoScore = ai.calcularLeadScore(historial, intencionDetectada, conversacion.lead_score);
@@ -425,30 +461,49 @@ app.post('/webhook', async (req, res) => {
 
 		await whatsapp.enviarMensaje(datos.telefono, respuesta);
 
-		// Si la respuesta menciona una nevera con foto disponible
-		const menciona = (texto, nombre) =>
-			texto.toLowerCase().includes(nombre.toLowerCase());
-
 		try {
-			const neveras = Array.isArray(inventario)
-				? inventario.filter((n) => n.foto_url)
-				: [];
+			// Solo enviar foto si el inventario tiene neveras
+			const { data: neveras } = await supabase
+				.from('neveras')
+				.select('nombre, tipo, uso_recomendado, foto_url')
+				.eq('disponible', true)
+				.not('foto_url', 'is', null);
 
 			if (neveras && neveras.length > 0) {
-				const neveraMencionada = neveras.find((n) =>
-					menciona(respuesta, String(n.nombre || ''))
-				);
 
-				if (neveraMencionada && neveraMencionada.foto_url) {
+				// Buscar la nevera mas relevante para lo que pidio el cliente
+				const mensajeCliente = datos.mensaje.toLowerCase();
+				const respuestaBot = respuesta.toLowerCase();
+
+				const neveraRelevante = neveras.find(n => {
+					const nombreL = (n.nombre || '').toLowerCase();
+					const usoL = (n.uso_recomendado || '').toLowerCase();
+					const tipoL = (n.tipo || '').toLowerCase();
+
+					// ¿El nombre o tipo de esta nevera aparece en la respuesta del bot?
+					const enRespuesta = respuestaBot.includes(nombreL) ||
+						respuestaBot.includes(tipoL);
+
+					// ¿El uso de esta nevera coincide con lo que pidio el cliente?
+					const enPedido = mensajeCliente.includes(tipoL) ||
+						(usoL && mensajeCliente.split(' ').some(p => usoL.includes(p) && p.length > 4));
+
+					return enRespuesta || enPedido;
+				});
+
+				// Solo enviar si encontramos una nevera realmente relevante
+				if (neveraRelevante) {
 					await whatsapp.enviarMensajeConImagen(
 						datos.telefono,
-						`📸 *${neveraMencionada.nombre}*`,
-						neveraMencionada.foto_url
+						`📸 *${neveraRelevante.nombre}*`,
+						neveraRelevante.foto_url
 					);
 				}
+				// Si no hay coincidencia clara -> NO enviar foto
+				// Mejor no enviar nada que enviar algo incorrecto
 			}
-		} catch (e) {
-			console.error('Error enviando foto nevera:', e);
+		} catch(e) {
+			console.error('Error enviando foto:', e);
 		}
 	} catch (error) {
 		console.error('[Webhook Error]', error);
