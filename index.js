@@ -22,7 +22,7 @@ const obtenerContextoInventario = async () => {
 	try {
 		const { data: neveras, error } = await supabase
 			.from('neveras')
-			.select('nombre, tipo, capacidad_litros, precio, uso_recomendado, temperatura_min, temperatura_max, descripcion')
+			.select('nombre, tipo, capacidad_litros, precio, uso_recomendado, descripcion')
 			.eq('disponible', true);
 
 		console.log('Query inventario resultado:', {
