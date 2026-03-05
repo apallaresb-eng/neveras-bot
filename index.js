@@ -398,30 +398,13 @@ app.get('/inventario-publico', async (req, res) => {
 		res.header('Access-Control-Allow-Methods', 'GET');
 		res.header('Cache-Control', 'public, max-age=300');
 
-		const { data: neveras, error } = await supabase
-			.from('neveras')
-			.select(`
-				id,
-				nombre,
-				tipo,
-				capacidad_litros,
-				precio,
-				disponible,
-				uso_recomendado,
-				foto_url,
-				temperatura_min,
-				temperatura_max,
-				descripcion
-			`)
-			.eq('disponible', true)
-			.order('precio', { ascending: true });
-
-		if (error) throw error;
+		// Usar la función de database.js en lugar de supabase directo
+		const neveras = await db.obtenerNeverasDisponibles();
 
 		res.json({
 			ok: true,
-			total: neveras?.length || 0,
-			neveras: neveras || [],
+			total: neveras.length,
+			neveras: neveras,
 			actualizado: new Date().toISOString()
 		});
 
@@ -430,7 +413,7 @@ app.get('/inventario-publico', async (req, res) => {
 		res.status(500).json({ 
 			ok: false, 
 			neveras: [],
-			error: 'Error al obtener inventario'
+			error: error.message
 		});
 	}
 });
