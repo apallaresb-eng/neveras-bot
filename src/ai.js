@@ -245,13 +245,19 @@ Genera un mensaje de seguimiento con urgencia moderada, mencionando que hay neve
 
 // 4. Formatear inventario para la IA
 function formatearInventarioParaIA(neveras) {
-  // Validar que hay neveras disponibles
-  if (!neveras || neveras.length === 0) {
-    return 'INVENTARIO: Sin stock disponible en este momento.';
+  // Normalizar: extraer .data si viene envuelto en objeto Supabase
+  const items = Array.isArray(neveras)
+    ? neveras
+    : (neveras?.data && Array.isArray(neveras.data))
+      ? neveras.data
+      : [];
+
+  if (items.length === 0) {
+    return 'INVENTARIO ACTUAL: No hay neveras disponibles en este momento.';
   }
   
   // Formatear cada nevera
-  const lineasInventario = neveras.map(nevera => {
+  const lineasInventario = items.map(nevera => {
     // Formatear precio con puntos como separadores de miles
     const precioFormateado = nevera.precio.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
     
