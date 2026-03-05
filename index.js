@@ -25,6 +25,12 @@ const obtenerContextoInventario = async () => {
 			.select('nombre, tipo, capacidad_litros, precio, uso_recomendado, temperatura_min, temperatura_max, descripcion')
 			.eq('disponible', true);
 
+		console.log('Query inventario resultado:', {
+			error: error?.message,
+			cantidad: neveras?.length,
+			datos: JSON.stringify(neveras)
+		});
+
 		if (error || !neveras || neveras.length === 0) {
 			return 'INVENTARIO ACTUAL: No hay neveras disponibles en este momento.';
 		}
