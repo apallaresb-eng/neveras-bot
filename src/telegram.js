@@ -148,7 +148,13 @@ El precio debe ser un número entero en pesos colombianos.`
 async function iniciarBot(dbModule) {
 	botInstance = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-	const esDueno = (chatId) => String(chatId) === String(process.env.TELEGRAM_OWNER_CHAT_ID);
+	const esDueno = (chatId) => {
+		const admins = [
+			process.env.TELEGRAM_OWNER_CHAT_ID,
+			...(process.env.TELEGRAM_ADMINS_IDS || '').split(',').map(x => x.trim()).filter(Boolean)
+		];
+		return admins.includes(String(chatId));
+	};
 	const esVendedor = (id) => {
 		const todos = [
 			process.env.TELEGRAM_OWNER_CHAT_ID,
