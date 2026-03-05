@@ -245,6 +245,7 @@ app.post('/webhook', async (req, res) => {
 				if (!audioRes.ok) throw new Error(`HTTP ${audioRes.status}`);
 
 				const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+				console.log('Audio descargado, tamaño:', audioBuffer.length, 'bytes');
 
 				// Enviar a Groq Whisper
 				const FormData = require('form-data');
@@ -269,6 +270,7 @@ app.post('/webhook', async (req, res) => {
 				);
 
 				const whisperData = await whisperRes.json();
+				console.log('Respuesta Whisper completa:', JSON.stringify(whisperData));
 
 				if (whisperData.text) {
 					console.log('Audio transcrito:', whisperData.text);
@@ -284,7 +286,7 @@ app.post('/webhook', async (req, res) => {
 				}
 
 			} catch (err) {
-				console.error('Error procesando audio:', err);
+				console.error('Error procesando audio:', err.message, err.stack);
 				await enviarMensaje(
 					datos.telefono,
 					'No pude escuchar bien el audio 😅 ¿Me lo puedes escribir?'
