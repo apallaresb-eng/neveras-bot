@@ -467,50 +467,97 @@ app.post('/webhook', async (req, res) => {
 
 		await whatsapp.enviarMensaje(datos.telefono, respuesta);
 
-		try {
-			// Solo enviar foto si el inventario tiene neveras
-			const { data: neveras } = await supabase
-				.from('neveras')
-				.select('nombre, tipo, uso_recomendado, foto_url')
-				.eq('disponible', true)
-				.not('foto_url', 'is', null);
+		// ═══ LÓGICA INTELIGENTE DE FOTOS ═══
+		const debeEnviarFoto = async (mensajeCliente, respuestaBot, telefono) => {
+			try {
+				// REGLA 1: Nunca enviar foto si el bot dice que no hay stock
+				const frasesNoStock = [
+					'no tenemos', 'no hay', 'sin stock', 'no contamos',
+					'no disponible', 'agotado', 'no tengo'
+				];
+				const botDiceNoHayStock = frasesNoStock.some(f =>
+					respuestaBot.toLowerCase().includes(f)
+				);
+				if (botDiceNoHayStock) return;
 
-			if (neveras && neveras.length > 0) {
+				// REGLA 2: Solo enviar foto cuando el bot recomienda algo concreto
+				const frasesRecomienda = [
+					'tenemos', 'disponible', 'contamos con', 'tengo',
+					'le puedo ofrecer', 'perfecta para', 'ideal para'
+				];
+				const botRecomienda = frasesRecomienda.some(f =>
+					respuestaBot.toLowerCase().includes(f)
+				);
+				if (!botRecomienda) return;
 
-				// Buscar la nevera mas relevante para lo que pidio el cliente
-				const mensajeCliente = datos.mensaje.toLowerCase();
-				const respuestaBot = respuesta.toLowerCase();
+				// REGLA 3: Buscar la nevera mas relevante para este cliente
+				const { data: neveras } = await supabase
+					.from('neveras')
+					.select('nombre, tipo, uso_recomendado, descripcion, foto_url')
+					.eq('disponible', true)
+					.not('foto_url', 'is', null);
 
-				const neveraRelevante = neveras.find(n => {
-					const nombreL = (n.nombre || '').toLowerCase();
-					const usoL = (n.uso_recomendado || '').toLowerCase();
-					const tipoL = (n.tipo || '').toLowerCase();
+				if (!neveras || neveras.length === 0) return;
 
-					// ¿El nombre o tipo de esta nevera aparece en la respuesta del bot?
-					const enRespuesta = respuestaBot.includes(nombreL) ||
-						respuestaBot.includes(tipoL);
+				const msgL = mensajeCliente.toLowerCase();
+				const respL = respuestaBot.toLowerCase();
 
-					// ¿El uso de esta nevera coincide con lo que pidio el cliente?
-					const enPedido = mensajeCliente.includes(tipoL) ||
-						(usoL && mensajeCliente.split(' ').some(p => usoL.includes(p) && p.length > 4));
+				// Mapa de palabras clave por tipo de negocio
+				const mapaNegocios = {
+					'horizontal': ['carnicería', 'carniceria', 'horizontal', 'carne', 'res', 'cerdo'],
+					'vertical': ['restaurante', 'cocina', 'vertical', 'farmacia', 'droguería', 'drogueria'],
+					'exhibidora': ['panadería', 'panaderia', 'pastelería', 'pasteleria', 'exhibidora', 'tienda', 'minimercado'],
+					'congelador': ['heladería', 'heladeria', 'congelador', 'helados', 'congelado']
+				};
 
-					return enRespuesta || enPedido;
-				});
+				// Determinar qué tipo busca el cliente
+				let tipoRequerido = null;
+				for (const [tipo, palabras] of Object.entries(mapaNegocios)) {
+					if (palabras.some(p => msgL.includes(p) || respL.includes(p))) {
+						tipoRequerido = tipo;
+						break;
+					}
+				}
 
-				// Solo enviar si encontramos una nevera realmente relevante
-				if (neveraRelevante) {
-					await whatsapp.enviarMensajeConImagen(
-						datos.telefono,
-						`📸 *${neveraRelevante.nombre}*`,
-						neveraRelevante.foto_url
+				// Buscar nevera que coincida con el tipo requerido
+				let neveraElegida = null;
+
+				if (tipoRequerido) {
+					neveraElegida = neveras.find(n => {
+						const tipoN = (n.tipo || '').toLowerCase();
+						const usoN = (n.uso_recomendado || '').toLowerCase();
+						const nomN = (n.nombre || '').toLowerCase();
+						return tipoN.includes(tipoRequerido) ||
+							usoN.includes(tipoRequerido) ||
+							nomN.includes(tipoRequerido);
+					});
+				}
+
+				// Si no encontró por tipo, buscar por nombre en la respuesta
+				if (!neveraElegida) {
+					neveraElegida = neveras.find(n =>
+						respL.includes((n.nombre || '').toLowerCase())
 					);
 				}
-				// Si no hay coincidencia clara -> NO enviar foto
-				// Mejor no enviar nada que enviar algo incorrecto
+
+				// Solo enviar si encontró coincidencia real
+				if (neveraElegida) {
+					// Esperar 1 segundo antes de enviar la foto (más natural)
+					await new Promise(r => setTimeout(r, 1000));
+					await enviarMensajeConImagen(
+						telefono,
+						`📸 *${neveraElegida.nombre}*\n_Esta es la que tenemos disponible_`,
+						neveraElegida.foto_url
+					);
+				}
+
+			} catch(e) {
+				console.error('Error lógica foto:', e);
 			}
-		} catch(e) {
-			console.error('Error enviando foto:', e);
-		}
+		};
+
+		// Llamar la función con los datos del mensaje actual
+		await debeEnviarFoto(datos.mensaje, respuestaBot, datos.telefono);
 	} catch (error) {
 		console.error('[Webhook Error]', error);
 	}

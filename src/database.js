@@ -490,6 +490,49 @@ const obtenerNeverasDisponibles = async () => {
   }
 };
 
+// ═══ SISTEMA DE APRENDIZAJE ═══
+
+// Guardar resultado de conversación
+const guardarAprendizaje = async (telefono, contexto) => {
+  try {
+    await supabase.from('bot_aprendizaje').upsert({
+      telefono,
+      ultimo_contexto: contexto.negocio || null,
+      tipo_nevera_buscada: contexto.tipoNevera || null,
+      cerro_venta: contexto.cerrVenta || false,
+      fue_util: contexto.fueUtil || null,
+      notas: contexto.notas || null,
+      actualizado_en: new Date().toISOString()
+    }, { onConflict: 'telefono' });
+  } catch(e) {
+    console.error('Error guardando aprendizaje:', e);
+  }
+};
+
+// Obtener estadísticas de qué respuestas funcionan
+const obtenerInsights = async () => {
+  try {
+    const { data } = await supabase
+      .from('bot_aprendizaje')
+      .select('tipo_nevera_buscada, cerro_venta, fue_util')
+      .not('tipo_nevera_buscada', 'is', null);
+
+    if (!data || data.length === 0) return null;
+
+    const stats = data.reduce((acc, row) => {
+      const tipo = row.tipo_nevera_buscada;
+      if (!acc[tipo]) acc[tipo] = { total: 0, ventas: 0 };
+      acc[tipo].total++;
+      if (row.cerro_venta) acc[tipo].ventas++;
+      return acc;
+    }, {});
+
+    return stats;
+  } catch(e) {
+    return null;
+  }
+};
+
 // Exportar todas las funciones
 module.exports = {
   obtenerInventarioDisponible,
@@ -510,5 +553,7 @@ module.exports = {
   asignarVendedor,
   obtenerConversacionPorTelefono,
   obtenerConversacionesPorVendedor,
-  obtenerNeverasDisponibles
+  obtenerNeverasDisponibles,
+  guardarAprendizaje,
+  obtenerInsights
 };
