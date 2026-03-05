@@ -222,6 +222,74 @@ app.post('/webhook', async (req, res) => {
 
 		const datos = whatsapp.extraerDatosMensaje(req.body);
 		if (!datos) return;
+		const enviarMensaje = whatsapp.enviarMensaje;
+
+		// Si es audio → transcribir primero
+		if (datos.esAudio && datos.mediaUrl) {
+			console.log('Audio recibido, transcribiendo...');
+
+			try {
+				// Descargar audio con autenticación Twilio
+				const credenciales = Buffer.from(
+					`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+				).toString('base64');
+
+				const audioRes = await fetch(datos.mediaUrl, {
+					headers: {
+						'Authorization': `Basic ${credenciales}`
+					}
+				});
+
+				if (!audioRes.ok) throw new Error(`HTTP ${audioRes.status}`);
+
+				const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+
+				// Enviar a Groq Whisper
+				const FormData = require('form-data');
+				const form = new FormData();
+				form.append('file', audioBuffer, {
+					filename: 'audio.ogg',
+					contentType: datos.mediaType || 'audio/ogg'
+				});
+				form.append('model', 'whisper-large-v3');
+				form.append('language', 'es');
+
+				const whisperRes = await fetch(
+					'https://api.groq.com/openai/v1/audio/transcriptions',
+					{
+						method: 'POST',
+						headers: {
+							'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+							...form.getHeaders()
+						},
+						body: form
+					}
+				);
+
+				const whisperData = await whisperRes.json();
+
+				if (whisperData.text) {
+					console.log('Audio transcrito:', whisperData.text);
+					datos.mensaje = whisperData.text;
+
+					// Confirmar al usuario que se escuchó
+					await enviarMensaje(
+						datos.telefono,
+						`🎤 _Escuché: "${whisperData.text}"_`
+					);
+				} else {
+					throw new Error('Sin transcripción');
+				}
+
+			} catch (err) {
+				console.error('Error procesando audio:', err);
+				await enviarMensaje(
+					datos.telefono,
+					'No pude escuchar bien el audio 😅 ¿Me lo puedes escribir?'
+				);
+				return;
+			}
+		}
 
 		if (!datos.mensaje) {
 			await whatsapp.enviarMensaje(
