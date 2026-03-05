@@ -247,39 +247,35 @@ app.post('/webhook', async (req, res) => {
 				const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
 				console.log('Audio descargado, tamaño:', audioBuffer.length, 'bytes');
 
-				// Enviar a Groq Whisper
-				const FormData = require('form-data');
-				const form = new FormData();
-				form.append('file', audioBuffer, {
-					filename: 'audio.ogg',
-					contentType: datos.mediaType || 'audio/ogg'
+				// Guardar audio temporal
+				const fs = require('fs');
+				const path = require('path');
+				const tmpPath = path.join('/tmp', `audio_${Date.now()}.ogg`);
+				fs.writeFileSync(tmpPath, audioBuffer);
+
+				// Transcribir con Groq usando su SDK
+				const Groq = require('groq-sdk');
+				const groqClient = new Groq({
+					apiKey: process.env.GROQ_API_KEY
 				});
-				form.append('model', 'whisper-large-v3');
-				form.append('language', 'es');
 
-				const whisperRes = await fetch(
-					'https://api.groq.com/openai/v1/audio/transcriptions',
-					{
-						method: 'POST',
-						headers: {
-							'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-							...form.getHeaders()
-						},
-						body: form
-					}
-				);
+				const transcripcion = await groqClient.audio.transcriptions.create({
+					file: fs.createReadStream(tmpPath),
+					model: 'whisper-large-v3',
+					language: 'es',
+					response_format: 'text'
+				});
 
-				const whisperData = await whisperRes.json();
-				console.log('Respuesta Whisper completa:', JSON.stringify(whisperData));
+				// Limpiar archivo temporal
+				try { fs.unlinkSync(tmpPath); } catch(e) {}
 
-				if (whisperData.text) {
-					console.log('Audio transcrito:', whisperData.text);
-					datos.mensaje = whisperData.text;
+				console.log('Transcripción resultado:', transcripcion);
 
-					// Confirmar al usuario que se escuchó
+				if (transcripcion && transcripcion.length > 0) {
+					datos.mensaje = transcripcion;
 					await enviarMensaje(
 						datos.telefono,
-						`🎤 _Escuché: "${whisperData.text}"_`
+						`🎤 _Escuché: "${transcripcion}"_`
 					);
 				} else {
 					throw new Error('Sin transcripción');
