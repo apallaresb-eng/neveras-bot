@@ -20,7 +20,7 @@ function tiempoRelativo(fechaIso) {
 	const fecha = new Date(fechaIso);
 	const ahora = new Date();
 	const diffMs = ahora.getTime() - fecha.getTime();
-
+	
 	if (Number.isNaN(diffMs) || diffMs < 0) return 'Hace un momento';
 
 	const minutos = Math.floor(diffMs / 60000);
@@ -353,18 +353,33 @@ app.post('/webhook', async (req, res) => {
 			return;
 		}
 
-		const neveraConFoto = Array.isArray(inventario)
-			? inventario.find(
-				(n) => n.foto_url && respuesta.toLowerCase().includes(String(n.nombre || '').toLowerCase())
-			)
-			: null;
-
-		if (neveraConFoto) {
-			await whatsapp.enviarMensajeConImagen(datos.telefono, neveraConFoto.foto_url, neveraConFoto.nombre);
-			await new Promise((r) => setTimeout(r, 800));
-		}
-
 		await whatsapp.enviarMensaje(datos.telefono, respuesta);
+
+		// Si la respuesta menciona una nevera con foto disponible
+		const menciona = (texto, nombre) =>
+			texto.toLowerCase().includes(nombre.toLowerCase());
+
+		try {
+			const neveras = Array.isArray(inventario)
+				? inventario.filter((n) => n.foto_url)
+				: [];
+
+			if (neveras && neveras.length > 0) {
+				const neveraMencionada = neveras.find((n) =>
+					menciona(respuesta, String(n.nombre || ''))
+				);
+
+				if (neveraMencionada && neveraMencionada.foto_url) {
+					await whatsapp.enviarMensajeConImagen(
+						datos.telefono,
+						`📸 *${neveraMencionada.nombre}*`,
+						neveraMencionada.foto_url
+					);
+				}
+			}
+		} catch (e) {
+			console.error('Error enviando foto nevera:', e);
+		}
 	} catch (error) {
 		console.error('[Webhook Error]', error);
 	}
