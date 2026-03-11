@@ -15,7 +15,7 @@ let botInstance = null;
 const estadosConversacion = new Map();
 // Ya no usamos relayActivo porque el bot responderá usando el message_thread_id
 // El ID del Súper Grupo donde se crearán los topics:
-const SUPER_GROUP_ID = process.env.TELEGRAM_OWNER_CHAT_ID; // Se asume que el owner configurará su ID o la de su grupo aquí.
+const SUPER_GROUP_ID = process.env.TELEGRAM_SUPER_GROUP_ID; // <--- AQUÍ VA EL -100...
 // Map en memoria por si Supabase no tiene la columna aún: Map<telefono, thread_id>
 const temporaryThreadMap = new Map();
 
@@ -766,7 +766,7 @@ async function reenviarMensajeAVendedor(telefonoCliente, mensajeCliente, nombreC
 		const conversacion = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
 		if (!conversacion) return false;
 
-		const superGroupId = process.env.TELEGRAM_OWNER_CHAT_ID;
+		const superGroupId = process.env.TELEGRAM_SUPER_GROUP_ID;
 		let threadId = temporaryThreadMap.get(telefonoCliente) || conversacion.telegram_thread_id;
 
 		// Si no hay Topic creado para este cliente, crearlo

@@ -38,10 +38,10 @@ class MarketingAgent extends BaseAgent {
       }
 
       const bot = telegramMod.obtenerInstanciaBot();
-      const superGroupId = process.env.TELEGRAM_OWNER_CHAT_ID;
+      const superGroupId = process.env.TELEGRAM_SUPER_GROUP_ID;
       
       if (!bot || !superGroupId) {
-        console.warn('⚠️ [MarketingAgent] Bot no inicializado o falta TELEGRAM_OWNER_CHAT_ID.');
+        console.warn('⚠️ [MarketingAgent] Bot no inicializado o falta TELEGRAM_SUPER_GROUP_ID.');
         return;
       }
 
