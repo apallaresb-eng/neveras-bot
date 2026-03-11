@@ -558,7 +558,7 @@ app.post('/webhook', async (req, res) => {
 		};
 
 		// Llamar la función con los datos del mensaje actual
-		await debeEnviarFoto(datos.mensaje, respuestaBot, datos.telefono);
+		await debeEnviarFoto(datos.mensaje, respuesta, datos.telefono);
 	} catch (error) {
 		console.error('[Webhook Error]', error);
 	}

@@ -8,11 +8,11 @@ const Orchestrator = require('./agents/Orchestrator');
 const dbModule = require('./database'); // Importado para el Agente de Memoria cuando sea necesario
 
 // 1. Procesar mensaje del cliente (Ahora delegado al Orchestrator Multi-Agente)
-async function procesarMensaje(telefono, mensajeCliente, contextoInventario = '', historialMensajes, inventarioDisponible, leadScore) {
+async function procesarMensaje(telefono, mensajeCliente, historialMensajes, inventarioDisponible, leadScore, contextoInventario = '') {
   try {
     // Buscar insights previos (esto se podría hacer aquí o dentro del Agent de memoria)
-    // Pasamos un string vacío por ahora o se pueden inyectar insights reales de la BD
-    let dbInsights = '';
+    // Usamos el contextoInventario como dbInsights para enriquecer al SalesAgent
+    const dbInsights = contextoInventario || '';
     
     // El orquestador toma el control completo:
     const resultado = await Orchestrator.procesarMensaje(
@@ -41,6 +41,7 @@ function calcularLeadScore(historialMensajes, intencionActual, scoreActual) {
   // Sumar puntos según intención actual
   switch (intencionActual) {
     case 'listo_para_comprar':
+    case 'cierre':           // El Orchestrator retorna 'cierre' cuando el cliente quiere pagar
       nuevoScore += 30;
       break;
     case 'pide_envio':

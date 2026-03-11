@@ -170,8 +170,11 @@ async function iniciarBot(dbModule) {
 		return todos.includes(String(id));
 	};
 
-	async function procesarDescripcionLibre(chatId, textoLibre) {
-		const datosIA = await estructurarDescripcionConIA(textoLibre);
+	async function procesarDescripcionLibre(chatId, textoLibre, textoAnterior = null) {
+		const textoFinal = textoAnterior
+			? `DESCRIPCION ANTERIOR: "${textoAnterior}"\nCOMPLEMENTO DEL DUENO: "${textoLibre}"\nCombina y corrige la informacion anterior con el complemento. Prioriza los datos mas recientes.`
+			: textoLibre;
+		const datosIA = await estructurarDescripcionConIA(textoFinal);
 
 		if (!datosIA) {
 			await botInstance.sendMessage(chatId, '❌ No pude entender la descripción. Intenta de nuevo con más detalles.');
@@ -191,18 +194,19 @@ async function iniciarBot(dbModule) {
 		estadosConversacion.set(chatId, estado);
 
 		const precioFormateado = datosIA.precio ? formatearPrecio(datosIA.precio) : 'No detectado';
+		const cantFotos = (estado.datos.fotosUrls || [estado.datos.fotoUrl]).filter(Boolean).length;
 
 		const resumen =
-			`🤖 *La IA estructuró la información así:*\n\n` +
-			`📌 *Nombre:* ${datosIA.nombre || '❓ No detectado'}\n` +
-			`📝 *Descripción:* ${datosIA.descripcion || '❓ No detectado'}\n` +
-			`⚙️ *Especificaciones:* ${datosIA.especificaciones || '❓ No detectado'}\n` +
-			`💰 *Precio:* $${precioFormateado} COP\n` +
-			`📦 *Tipo:* ${datosIA.tipo || '❓ No detectado'}\n` +
-			`🏪 *Ideal para:* ${datosIA.uso_recomendado || '❓ No detectado'}\n` +
-			`📐 *Capacidad:* ${datosIA.capacidad_litros ? `${datosIA.capacidad_litros}L` : '❓ No detectado'}\n` +
-			`🖼️ *Foto:* ✅ Guardada\n\n` +
-			`¿Todo correcto?\n✅ *SÍ* para guardar al inventario\n❌ *NO* para cancelar`;
+			`*La IA estructuro la informacion asi:*\n\n` +
+			`*Nombre:* ${datosIA.nombre || 'No detectado'}\n` +
+			`*Descripcion:* ${datosIA.descripcion || 'No detectado'}\n` +
+			`*Especificaciones:* ${datosIA.especificaciones || 'No detectado'}\n` +
+			`*Precio:* $${precioFormateado} COP\n` +
+			`*Tipo:* ${datosIA.tipo || 'No detectado'}\n` +
+			`*Ideal para:* ${datosIA.uso_recomendado || 'No detectado'}\n` +
+			`*Capacidad:* ${datosIA.capacidad_litros ? `${datosIA.capacidad_litros}L` : 'No detectado'}\n` +
+			`*Fotos:* ${cantFotos} foto(s) guardada(s)\n\n` +
+			`Todo correcto?\n*SI* para guardar al inventario\n*NO* para cancelar\n_Envia otro audio/texto si se te olvido algo y lo actualizo._`;
 
 		await botInstance.sendMessage(chatId, resumen, { parse_mode: 'Markdown' });
 	}
@@ -210,6 +214,10 @@ async function iniciarBot(dbModule) {
 	async function guardarNeveraEnBD(chatId) {
 		const estado = estadosConversacion.get(chatId);
 		if (!estado) return;
+
+		const fotoUrl = (estado.datos.fotosUrls && estado.datos.fotosUrls.length > 0)
+			? estado.datos.fotosUrls[0]
+			: estado.datos.fotoUrl;
 
 		const resultado = await dbModule.guardarNevera({
 			nombre: estado.datos.nombre,
@@ -219,7 +227,7 @@ async function iniciarBot(dbModule) {
 			tipo: estado.datos.tipo,
 			capacidad_litros: estado.datos.capacidadLitros,
 			uso_recomendado: estado.datos.usoRecomendado,
-			foto_url: estado.datos.fotoUrl
+			foto_url: fotoUrl
 		});
 
 		estadosConversacion.delete(chatId);
@@ -244,25 +252,42 @@ async function iniciarBot(dbModule) {
 		const senderId = msg.from.id;
 
 		if (!esDueno(senderId)) {
-			await botInstance.sendMessage(chatId, '⛔ No tienes permiso para agregar inventario.', { reply_to_message_id: msg.message_id });
+			await botInstance.sendMessage(chatId, 'No tienes permiso para agregar inventario.', { reply_to_message_id: msg.message_id });
 			return;
 		}
 
-		if (estadosConversacion.has(chatId)) {
-			await botInstance.sendMessage(
-				chatId,
-				'⚠️ Ya hay una nevera en proceso. Confirma o cancela antes de agregar otra.'
-			);
+		const estadoActual = estadosConversacion.get(chatId);
+
+		// Si ya hay una nevera en proceso con descripcion pendiente, acumular fotos adicionales
+		if (estadoActual && estadoActual.paso === 'esperando_descripcion') {
+			await botInstance.sendMessage(chatId, 'Subiendo foto adicional...');
+			const fileIdExtra = msg.photo[msg.photo.length - 1].file_id;
+			const resExtra = await subirFotoASupabase(botInstance, fileIdExtra);
+			if (resExtra) {
+				if (!estadoActual.datos.fotosUrls) {
+					estadoActual.datos.fotosUrls = [estadoActual.datos.fotoUrl].filter(Boolean);
+				}
+				estadoActual.datos.fotosUrls.push(resExtra.url);
+				estadosConversacion.set(chatId, estadoActual);
+				await botInstance.sendMessage(chatId, `Foto ${estadoActual.datos.fotosUrls.length} guardada. Sigue enviando fotos o describe la nevera cuando estes listo.`);
+			} else {
+				await botInstance.sendMessage(chatId, 'Error al subir la foto adicional. Intenta de nuevo.');
+			}
 			return;
 		}
 
-		await botInstance.sendMessage(chatId, '⏳ Subiendo foto al servidor...');
+		if (estadoActual) {
+			await botInstance.sendMessage(chatId, 'Ya hay una nevera en proceso. Confirma o cancela primero.');
+			return;
+		}
+
+		await botInstance.sendMessage(chatId, 'Subiendo foto al servidor...');
 
 		const fileId = msg.photo[msg.photo.length - 1].file_id;
 		const resultado = await subirFotoASupabase(botInstance, fileId);
 
 		if (!resultado) {
-			await botInstance.sendMessage(chatId, '❌ Error al subir la foto. Intenta de nuevo.');
+			await botInstance.sendMessage(chatId, 'Error al subir la foto. Intenta de nuevo.');
 			return;
 		}
 
@@ -270,6 +295,7 @@ async function iniciarBot(dbModule) {
 			paso: 'esperando_descripcion',
 			datos: {
 				fotoUrl: resultado.url,
+				fotosUrls: [resultado.url],
 				nombreArchivo: resultado.nombreArchivo,
 				nombre: null,
 				descripcion: null,
@@ -283,7 +309,7 @@ async function iniciarBot(dbModule) {
 
 		await botInstance.sendMessage(
 			chatId,
-			'✅ *¡Foto guardada!*\n\nAhora descríbeme la nevera como quieras.\n\nPuedes *enviar un audio* hablando o *escribir un texto*. No hay formato fijo, habla natural:\n\n_Ejemplo: "Esta es una horizontal Haceb de 400 litros, compresor nuevo, congela a -20 grados, sirve para carnicería, vale tres millones ochocientos"_',
+			'*Foto 1 guardada!*\n\nPuedes *enviar mas fotos del mismo equipo* (angulos, serial, interior) y las junto todas al mismo item.\n\nCuando estes listo, *describe la nevera* por audio o texto.\n\n_Ejemplo: "Horizontal Haceb 400 litros, compresor nuevo, congela a -20 grados, vale tres millones ochocientos"_',
 			{ parse_mode: 'Markdown' }
 		);
 	});
@@ -295,27 +321,35 @@ async function iniciarBot(dbModule) {
 		if (!esDueno(senderId)) return;
 
 		const estado = estadosConversacion.get(chatId);
-		if (!estado || estado.paso !== 'esperando_descripcion') return;
+		if (!estado || (estado.paso !== 'esperando_descripcion' && estado.paso !== 'esperando_confirmacion')) return;
 
-		await botInstance.sendMessage(chatId, '🎙️ Transcribiendo audio...');
+		const esEdicion = estado.paso === 'esperando_confirmacion';
+		await botInstance.sendMessage(chatId, esEdicion ? 'Transcribiendo correccion...' : 'Transcribiendo audio...');
 
 		const transcripcion = await transcribirAudio(botInstance, msg.voice.file_id);
 
 		if (!transcripcion) {
-			await botInstance.sendMessage(
-				chatId,
-				'❌ No pude transcribir el audio. Intenta de nuevo o escribe la descripción.'
-			);
+			await botInstance.sendMessage(chatId, 'No pude transcribir el audio. Intenta de nuevo o escribe la descripcion.');
 			return;
 		}
 
 		await botInstance.sendMessage(
 			chatId,
-			`📝 *Entendí esto:*\n"${transcripcion}"\n\n⏳ Procesando...`,
+			`*Entendi esto:*\n"${transcripcion}"\n\n${esEdicion ? 'Actualizando informacion...' : 'Procesando...'}`,
 			{ parse_mode: 'Markdown' }
 		);
 
-		await procesarDescripcionLibre(chatId, transcripcion);
+		const textoAnterior = esEdicion
+			? [
+				estado.datos.nombre,
+				estado.datos.descripcion,
+				estado.datos.especificaciones,
+				estado.datos.precio ? `precio: ${estado.datos.precio}` : '',
+				estado.datos.tipo ? `tipo: ${estado.datos.tipo}` : ''
+			].filter(Boolean).join('. ')
+			: null;
+
+		await procesarDescripcionLibre(chatId, transcripcion, textoAnterior);
 	});
 
 	botInstance.on('message', async (msg) => {

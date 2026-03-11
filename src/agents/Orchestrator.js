@@ -43,9 +43,20 @@ class Orchestrator extends BaseAgent {
 
       if (auditoria.estado === 'RECHAZADO') {
         console.warn('⚠️ [VerifierAgent] Interceptó una respuesta:', auditoria.motivo);
-        // Autocorrección simple pidiendo al SalesAgent rehacerlo, o simplemente tomar la sugerencia.
+        // Autocorrección: usar la sugerencia como instrucción para que el SalesAgent se rehaga
         if (auditoria.sugerencia_correccion) {
-          return { respuesta: auditoria.sugerencia_correccion, intencionDetectada: intencion, auditado: true };
+          // Le pasamos la sugerencia como nueva instrucción interna para que el bot RESPONDA mejor,
+          // nunca como mensaje directo al cliente.
+          const mensajeCorregido = await SalesAgent.responderVenta(
+            `CORRECCIÓN INTERNA (NO REVELAR AL CLIENTE). Responde de nuevo, pero esta vez sigue esta guía: "${auditoria.sugerencia_correccion}". El mensaje original del cliente era: "${mensajeCliente}"`,
+            historial,
+            inventarioDisponible,
+            contextoTotal,
+            leadScore
+          );
+          if (mensajeCorregido) {
+            return { respuesta: mensajeCorregido, intencionDetectada: intencion, auditado: true };
+          }
         }
         return { respuesta: 'Disculpe, verificando el inventario actual me di cuenta de un error en lo que iba a decirle. ¿Me permite revisar y le cuento qué tenemos en bodega?', intencionDetectada: intencion };
       }
