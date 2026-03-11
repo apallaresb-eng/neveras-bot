@@ -241,9 +241,10 @@ async function iniciarBot(dbModule) {
 
 	botInstance.on('photo', async (msg) => {
 		const chatId = msg.chat.id;
+		const senderId = msg.from.id;
 
-		if (!esDueno(chatId)) {
-			await botInstance.sendMessage(chatId, '⛔ No tienes permiso.');
+		if (!esDueno(senderId)) {
+			await botInstance.sendMessage(chatId, '⛔ No tienes permiso para agregar inventario.', { reply_to_message_id: msg.message_id });
 			return;
 		}
 
@@ -289,8 +290,9 @@ async function iniciarBot(dbModule) {
 
 	botInstance.on('voice', async (msg) => {
 		const chatId = msg.chat.id;
+		const senderId = msg.from.id;
 
-		if (!esDueno(chatId)) return;
+		if (!esDueno(senderId)) return;
 
 		const estado = estadosConversacion.get(chatId);
 		if (!estado || estado.paso !== 'esperando_descripcion') return;
@@ -363,10 +365,9 @@ async function iniciarBot(dbModule) {
 
 		if (msg.text.startsWith('/')) return;
 
-		// El chatId ya fue declarado arriba (línea 314 aprox.) y usado ahí.
-		// Reusar la constante isSuperGroup de arriba en lugar de declararla de nuevo.
 		const senderChatId = msg.chat.id;
-		if (!esDueno(senderChatId)) return;
+		const senderId = msg.from.id;
+		if (!esDueno(senderId)) return;
 
 		const texto = msg.text.trim();
 		if (!estadosConversacion.has(senderChatId)) return;
@@ -405,9 +406,10 @@ async function iniciarBot(dbModule) {
 
 	botInstance.onText(/^\/inventario$/, async (msg) => {
 		const chatId = msg.chat.id;
+		const senderId = msg.from.id;
 
-		if (!esDueno(chatId)) {
-			await botInstance.sendMessage(chatId, '⛔ No tienes permiso.');
+		if (!esDueno(senderId)) {
+			await botInstance.sendMessage(chatId, '⛔ No tienes permiso para ver el inventario.', { reply_to_message_id: msg.message_id });
 			return;
 		}
 
@@ -430,9 +432,10 @@ async function iniciarBot(dbModule) {
 
 	botInstance.onText(/^\/eliminar(?:\s+(.+))?$/, async (msg, match) => {
 		const chatId = msg.chat.id;
+		const senderId = msg.from.id;
 
-		if (!esDueno(chatId)) {
-			await botInstance.sendMessage(chatId, '⛔ No tienes permiso.');
+		if (!esDueno(senderId)) {
+			await botInstance.sendMessage(chatId, '⛔ No tienes permiso para eliminar neveras.', { reply_to_message_id: msg.message_id });
 			return;
 		}
 
@@ -466,9 +469,10 @@ async function iniciarBot(dbModule) {
 
 	botInstance.onText(/^\/estadisticas$/, async (msg) => {
 		const chatId = msg.chat.id;
+		const senderId = msg.from.id;
 
-		if (!esDueno(chatId)) {
-			await botInstance.sendMessage(chatId, '⛔ No tienes permiso.');
+		if (!esDueno(senderId)) {
+			await botInstance.sendMessage(chatId, '⛔ No tienes permiso para ver estadísticas.', { reply_to_message_id: msg.message_id });
 			return;
 		}
 
@@ -492,9 +496,10 @@ async function iniciarBot(dbModule) {
 
 	botInstance.onText(/^\/envio(?:\s+(.+))?$/, async (msg, match) => {
 		const chatId = msg.chat.id;
+		const senderId = msg.from.id;
 
-		if (!esDueno(chatId)) {
-			await botInstance.sendMessage(chatId, '⛔ No tienes permiso.');
+		if (!esDueno(senderId)) {
+			await botInstance.sendMessage(chatId, '⛔ No tienes permiso de configuración de envíos.', { reply_to_message_id: msg.message_id });
 			return;
 		}
 
@@ -709,13 +714,14 @@ async function iniciarBot(dbModule) {
 
 	botInstance.onText(/^\/(start|ayuda)$/, async (msg) => {
 		const chatId = msg.chat.id;
+		const senderId = msg.from.id;
 
-		if (!esVendedor(chatId)) {
-			await botInstance.sendMessage(chatId, '⛔ No tienes permiso.');
+		if (!esVendedor(senderId)) {
+			await botInstance.sendMessage(chatId, '⛔ No tienes permiso. Registra tu ID con el dueño.', { reply_to_message_id: msg.message_id });
 			return;
 		}
 
-		if (esVendedor(chatId) && !esDueno(chatId)) {
+		if (esVendedor(senderId) && !esDueno(senderId)) {
 			const menuVendedor =
 				'👋 *Panel de Vendedor - Neveras Bot*\n\n' +
 				'📋 *Instrucciones Súper Grupo:*\n' +
