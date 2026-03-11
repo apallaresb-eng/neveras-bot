@@ -438,6 +438,38 @@ async function asignarVendedor(conversacionId, telegramId) {
   }
 }
 
+// 16.1. Vincular Thread de Telegram a Conversación
+async function vincularThreadAConversacion(conversacionId, threadId) {
+  try {
+    const { error } = await supabase
+      .from('conversaciones')
+      .update({ telegram_thread_id: threadId })
+      .eq('id', conversacionId);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error al vincular thread a conversación:', error);
+    return false;
+  }
+}
+
+// 16.2. Desasignar vendedor (devolver al bot)
+async function desasignarVendedor(conversacionId) {
+  try {
+    const { error } = await supabase
+      .from('conversaciones')
+      .update({ vendedor_telegram_id: null })
+      .eq('id', conversacionId);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error al desasignar vendedor:', error);
+    return false;
+  }
+}
+
 // 17. Obtener conversación escalada por teléfono
 async function obtenerConversacionPorTelefono(telefono) {
   try {
@@ -452,6 +484,23 @@ async function obtenerConversacionPorTelefono(telefono) {
     return data || null;
   } catch (error) {
     console.error('Error al obtener conversación por teléfono:', error);
+    return null;
+  }
+}
+
+// 17.1. Obtener conversación por Thread ID de Telegram
+async function obtenerConversacionPorThreadId(threadId) {
+  try {
+    const { data, error } = await supabase
+      .from('conversaciones')
+      .select('*')
+      .eq('telegram_thread_id', threadId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error al obtener conversación por thread ID:', error);
     return null;
   }
 }
@@ -551,7 +600,10 @@ module.exports = {
   liberarReservaNevera,
   verificarDisponibilidadNevera,
   asignarVendedor,
+  desasignarVendedor,
+  vincularThreadAConversacion,
   obtenerConversacionPorTelefono,
+  obtenerConversacionPorThreadId,
   obtenerConversacionesPorVendedor,
   obtenerNeverasDisponibles,
   guardarAprendizaje,

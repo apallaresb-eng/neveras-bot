@@ -4,206 +4,29 @@ const Groq = require('groq-sdk');
 
 // Inicializar cliente Groq
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const Orchestrator = require('./agents/Orchestrator');
+const dbModule = require('./database'); // Importado para el Agente de Memoria cuando sea necesario
 
-// Constante con instrucciones del sistema
-const SYSTEM_PROMPT = `Eres Juan, asesor experto de
-Compra Venta Jireh, Bogotá. Vendemos neveras industriales
-remanufacturadas con garantía.
-
-═══ TU CONOCIMIENTO EXPERTO ═══
-
-MAPA MENTAL — cuando el cliente menciona su negocio,
-ya sabes qué nevera necesita:
-
-CARNICERÍA/FRIGORÍFICO:
-→ Necesita: horizontal o vertical grande
-→ Temperatura: -2°C a 4°C
-→ Por qué: mantiene carnes frescas, fácil acceso
-
-RESTAURANTE/COCINA:
-→ Necesita: vertical o bajo mesón
-→ Temperatura: 2°C a 8°C
-→ Por qué: acceso rápido, ahorra espacio
-
-PANADERÍA/PASTELERÍA:
-→ Necesita: exhibidora de vidrio o vertical
-→ Temperatura: 2°C a 8°C
-→ Por qué: el cliente ve el producto y compra por impulso
-
-TIENDA/MINIMERCADO:
-→ Necesita: exhibidora horizontal o vertical con vidrio
-→ Temperatura: 2°C a 8°C
-→ Por qué: visibilidad del producto aumenta ventas
-
-FARMACIA/DROGUERÍA:
-→ Necesita: vertical pequeña o mediana
-→ Temperatura: 2°C a 8°C
-→ Por qué: medicamentos sensibles a temperatura
-
-HELADERÍA/HELADOS:
-→ Necesita: congelador horizontal o vertical
-→ Temperatura: -18°C a -25°C
-→ Por qué: conservación de helados
-
-FRUVER/VERDURAS:
-→ Necesita: horizontal grande o cuarto frío
-→ Temperatura: 4°C a 10°C
-→ Por qué: conserva frescura sin congelar
-
-═══ TIPOS DE NEVERA QUE VENDEMOS ═══
-
-HORIZONTAL: Tapa arriba, acceso desde arriba
-- Ideal: carnicerías, fruvers, almacenamiento masivo
-- Ventaja: bajo consumo energético, alta capacidad
-
-VERTICAL: Puerta(s) al frente, como un refrigerador
-- Ideal: restaurantes, tiendas, farmacias
-- Ventaja: fácil acceso, organización visible
-
-EXHIBIDORA: Vidrio al frente o arriba
-- Ideal: panaderías, tiendas, puntos de venta
-- Ventaja: el cliente ve el producto y compra más
-
-CONGELADOR: Temperaturas bajo 0°C
-- Ideal: heladerías, carnes congeladas, mariscos
-- Ventaja: conservación de largo plazo
-
-═══ PRECIOS REFERENCIALES ═══
-CADA NEVERA VARIA Y NO TENGO UN PRECIO EXACTO, PERO EL MINIMO SON $1.000.000 COP
-(Precios varían según capacidad y estado)
-
-═══ REGLAS DE CONVERSACIÓN ═══
-
-1. ESCUCHA PRIMERO: Cuando el cliente dice su negocio,
-   di qué tipo de nevera necesita y POR QUÉ antes de
-   preguntar más. Demuestra que sabes del tema.
-
-2. SOBRE EL STOCK:
-   - Consulta SIEMPRE el inventario real antes de responder
-   - Si hay stock que coincide → descríbelo con entusiasmo
-   - Si el stock no coincide exactamente → di qué tienes
-     y pregunta si le puede servir
-   - Si no hay stock → sé honesto y ofrece avisarle
-     cuando llegue algo
-
-3. MEDIDAS: Si el cliente da medidas (alto, ancho, fondo),
-   compara con lo disponible. Si no tienes las medidas
-   exactas en el inventario, dilo honestamente y ofrece
-   coordinar una visita o enviar foto real.
-
-4. LENGUAJE:
-   - Colombiano natural: "claro que sí", "mire",
-     "le cuento", "con mucho gusto"
-   - Párrafos cortos — máximo 3 líneas seguidas
-   - Saltos de línea entre ideas
-   - Máximo 1 emoji por mensaje
-   - NUNCA uses lenguaje corporativo
-
-5. FLUJO DE VENTA:
-   Paso 1: Entender el negocio y necesidad
-   Paso 2: Recomendar el tipo correcto con argumento
-   Paso 3: Mostrar lo disponible en stock
-   Paso 4: Resolver dudas (medidas, garantía, envío)
-   Paso 5: Cerrar — pedir ciudad para cotizar envío
-
-═══ REGLAS ABSOLUTAS ═══
-- NUNCA inventes stock que no existe
-- NUNCA envíes información técnica innecesaria
-- NUNCA hagas más de 1 pregunta por mensaje
-- SIEMPRE termina con una pregunta o próximo paso claro
-- Si el cliente da medidas, reconócelas explícitamente`;
-
-// 1. Procesar mensaje del cliente
+// 1. Procesar mensaje del cliente (Ahora delegado al Orchestrator Multi-Agente)
 async function procesarMensaje(telefono, mensajeCliente, contextoInventario = '', historialMensajes, inventarioDisponible, leadScore) {
   try {
-    // Formatear inventario para incluir en el prompt
-    const inventarioFormateado = formatearInventarioParaIA(inventarioDisponible);
+    // Buscar insights previos (esto se podría hacer aquí o dentro del Agent de memoria)
+    // Pasamos un string vacío por ahora o se pueden inyectar insights reales de la BD
+    let dbInsights = '';
     
-    // Construir el prompt del sistema completo con inventario
-    const systemPrompt = `${SYSTEM_PROMPT}\n\n${inventarioFormateado}
+    // El orquestador toma el control completo:
+    const resultado = await Orchestrator.procesarMensaje(
+      telefono,
+      mensajeCliente,
+      historialMensajes,
+      inventarioDisponible,
+      leadScore,
+      dbInsights
+    );
 
-    REGLAS CRITICAS SOBRE EL INVENTARIO:
-    1. NUNCA digas que tienes algo que no esta en el inventario
-    2. Si el inventario dice "No hay neveras disponibles",
-      dile al cliente honestamente que estas sin stock
-      en este momento y que puede dejar sus datos para
-      avisarle cuando llegue
-    3. Si el cliente pide medidas especificas (alto, ancho,
-      fondo) y no tienes una que coincida exactamente,
-      diselo y ofrece la mas cercana que SI tienes
-    4. Nunca inventes precios, capacidades ni medidas
-    5. Si no hay stock, no ofrezcas nada - se honesto
-    6. Solo recomienda neveras que aparezcan en el
-      inventario actual
-    7. Si el inventario esta vacio, di algo como:
-      "Ahorita no tenemos stock disponible, pero
-      constantemente nos llegan equipos nuevos.
-      ¿Le puedo anotar para avisarle?"`;
-    const systemPromptCompleto = systemPrompt +
-      '\n\n' + (contextoInventario || '');
-
-    // Limitar y limpiar historial para no exceder tokens de Groq
-    const historialLimpio = (historialMensajes || [])
-      .slice(-20)
-      .filter(m => m && m.role && m.content);
-    
-    // Construir mensajes para la API
-    const messages = [
-      { role: 'system', content: systemPromptCompleto },
-      ...historialLimpio,
-      { role: 'user', content: mensajeCliente }
-    ];
-    
-    // Llamar a Groq
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: messages,
-      temperature: 0.7,
-      max_tokens: 600
-    });
-    
-    const respuesta = completion.choices[0]?.message?.content || 'Disculpe, ¿puede repetir su consulta?';
-    
-    // Detectar intención del mensaje del cliente
-    const mensajeLower = mensajeCliente.toLowerCase();
-    let intencionDetectada = 'explorando';
-    
-    // Listo para comprar
-    if (mensajeLower.includes('cómo pago') || 
-        mensajeLower.includes('pagar') || 
-        mensajeLower.includes('me la llevo') || 
-        mensajeLower.includes('la quiero') || 
-        mensajeLower.includes('transferencia') || 
-        mensajeLower.includes('nequi') || 
-        mensajeLower.includes('daviplata') || 
-        mensajeLower.includes('link de pago')) {
-      intencionDetectada = 'listo_para_comprar';
-    }
-    // Pide información de envío
-    else if (mensajeLower.includes('envío') || 
-             mensajeLower.includes('enviar') || 
-             mensajeLower.includes('flete') || 
-             mensajeLower.includes('despachar') || 
-             mensajeLower.includes('llevar a') || 
-             mensajeLower.includes('cuánto queda en')) {
-      intencionDetectada = 'pide_envio';
-    }
-    // Interesado
-    else if (mensajeLower.includes('precio') || 
-             mensajeLower.includes('cuánto vale') || 
-             mensajeLower.includes('cuánto cuesta') || 
-             mensajeLower.includes('garantía') || 
-             mensajeLower.includes('especificaciones') || 
-             mensajeLower.includes('capacidad')) {
-      intencionDetectada = 'interesado';
-    }
-    
-    return {
-      respuesta,
-      intencionDetectada
-    };
+    return resultado;
   } catch (error) {
-    console.error('Error al procesar mensaje con IA:', error);
+    console.error('Error al procesar mensaje con la Orquestación de IA:', error);
     return {
       respuesta: 'Disculpe, tuve un inconveniente técnico. ¿Me repite su consulta por favor? 😊',
       intencionDetectada: 'explorando'

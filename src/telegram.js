@@ -5,6 +5,7 @@ const Groq = require('groq-sdk');
 const fs = require('fs');
 const path = require('path');
 const whatsappMod = require('./whatsapp');
+const VisualAgent = require('./agents/VisualAgent');
 require('dotenv').config();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
@@ -12,7 +13,11 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 let botInstance = null;
 const estadosConversacion = new Map();
-const relayActivo = new Map();
+// Ya no usamos relayActivo porque el bot responderá usando el message_thread_id
+// El ID del Súper Grupo donde se crearán los topics:
+const SUPER_GROUP_ID = process.env.TELEGRAM_OWNER_CHAT_ID; // Se asume que el owner configurará su ID o la de su grupo aquí.
+// Map en memoria por si Supabase no tiene la columna aún: Map<telefono, thread_id>
+const temporaryThreadMap = new Map();
 
 function formatearPrecio(precio) {
 	if (precio === null || precio === undefined || Number.isNaN(Number(precio))) {
@@ -28,7 +33,10 @@ async function subirFotoASupabase(bot, fileId) {
 		const telegramFileUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
 
 		const response = await axios.get(telegramFileUrl, { responseType: 'arraybuffer' });
-		const buffer = Buffer.from(response.data);
+		let buffer = Buffer.from(response.data);
+
+		// PASO Opcional: Remover fondo si tenemos API key configurada
+		buffer = await VisualAgent.removerFondo(buffer);
 
 		const nombreArchivo = `nevera_${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
 
@@ -111,21 +119,20 @@ async function estructurarDescripcionConIA(textoLibre) {
 			messages: [
 				{
 					role: 'system',
-					content: `Eres un asistente que extrae información de neveras industriales.
-A partir de una descripción libre en español colombiano, extrae los campos
-y responde ÚNICAMENTE con un JSON válido con esta estructura exacta:
+					content: `Eres un asistente experto que extrae información de neveras industriales recibida desde un audio transcrito en jerga colombiana.
+ATENCIÓN: Como proviene de un reconocimiento de voz, puede haber errores fonéticos. Corrige mentalmente palabras como "aseb/hace" -> "Haceb", "imbera" -> "Imbera", "botellero" -> "Enfriador", "millon" -> "1000000", etc.
+A partir de la descripción libre, extrae los campos y responde ÚNICAMENTE con un JSON válido con esta estructura exacta:
 {
-	"nombre": "nombre comercial de la nevera",
-	"descripcion": "descripción atractiva de 1-2 oraciones para mostrar al cliente",
-	"especificaciones": "specs técnicas: voltaje, gas refrigerante, compresor, temperatura, etc",
-	"precio": número sin puntos ni comas (solo dígitos),
+	"nombre": "Marca y modelo corto de la nevera (ej. Exhibidora Haceb)",
+	"descripcion": "Descripción comercial atractiva de 1-2 oraciones para seducir al cliente. Corrige los errores de gramática y transcripción del audio.",
+	"especificaciones": "Especificaciones técnicas mencionadas (voltaje, gas, estado, temperatura, etc).",
+	"precio": número entero sin puntos ni letras (ej. 1500000),
 	"tipo": "horizontal" | "vertical" | "exhibidora" | "congelador",
-	"uso_recomendado": "tipo de negocio ideal",
-	"capacidad_litros": número entero
+	"uso_recomendado": "Tipo de negocio ideal (ej. Carnicería, Fruver, Droguería)",
+	"capacidad_litros": número entero o null
 }
-Si no puedes determinar algún campo con certeza, usa null.
-No incluyas texto antes ni después del JSON.
-El precio debe ser un número entero en pesos colombianos.`
+Si no se dice explícitamente el precio o algún campo, trata de inferirlo lógicamente del contexto. Si es imposible, pon null.
+NO incluyas saludos ni comillas Markdown. Tu salida deber ser 100% parseable con JSON.parse().`
 				},
 				{
 					role: 'user',
@@ -312,37 +319,63 @@ async function iniciarBot(dbModule) {
 	botInstance.on('message', async (msg) => {
 		if (!msg.text) return;
 
-		const esVendedorConRelay = relayActivo.has(String(msg.chat.id)) &&
-			esVendedor(msg.chat.id) &&
-			msg.text &&
-			!msg.text.startsWith('/');
+		const chatId = Number(msg.chat.id);
+		const isSuperGroup = chatId === Number(SUPER_GROUP_ID);
+		const threadId = msg.message_thread_id;
 
-		if (esVendedorConRelay) {
-			const telefonoCliente = relayActivo.get(String(msg.chat.id));
-			await whatsappMod.enviarMensaje(telefonoCliente, msg.text);
-			await botInstance.sendMessage(msg.chat.id, '✅ Enviado al cliente', { reply_to_message_id: msg.message_id });
-
-			const conv = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
-			if (conv) {
-				const nuevoHistorial = [...(conv.mensajes || []), { role: 'assistant', content: msg.text, tipo: 'vendedor' }];
-				await dbModule.actualizarConversacion(conv.id, nuevoHistorial, conv.lead_score, conv.estado);
+		// Si el mensaje viene del SúperGrupo, dentro de un Topic, y no es un comando
+		if (isSuperGroup && threadId && !msg.text.startsWith('/')) {
+			// Buscar a qué teléfono pertenece este thread
+			let telefonoCliente = null;
+			
+			// 1. Buscar en memoria temporal
+			for (const [tel, tId] of temporaryThreadMap.entries()) {
+				if (tId === threadId) {
+					telefonoCliente = tel;
+					break;
+				}
 			}
-			return;
+
+			// 2. Si no está en memoria, buscar en la BD (cuando la columna exista)
+			if (!telefonoCliente) {
+				const convId = await dbModule.obtenerConversacionPorThreadId(threadId);
+				if (convId) telefonoCliente = convId.telefono;
+			}
+
+			if (telefonoCliente) {
+				// Enviar a WhatsApp
+				await whatsappMod.enviarMensaje(telefonoCliente, msg.text);
+				
+				// Actualizar BD
+				const conv = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
+				if (conv) {
+					// Asignar el vendedor que respondió la primera vez
+					if (!conv.vendedor_telegram_id) {
+						await dbModule.asignarVendedor(conv.id, msg.from.id);
+					}
+					
+					const nuevoHistorial = [...(conv.mensajes || []), { role: 'assistant', content: msg.text, tipo: 'vendedor' }];
+					await dbModule.actualizarConversacion(conv.id, nuevoHistorial, conv.lead_score, 'escalado');
+				}
+				return;
+			}
 		}
 
 		if (msg.text.startsWith('/')) return;
 
-		const chatId = msg.chat.id;
-		if (!esDueno(chatId)) return;
+		// El chatId ya fue declarado arriba (línea 314 aprox.) y usado ahí.
+		// Reusar la constante isSuperGroup de arriba en lugar de declararla de nuevo.
+		const senderChatId = msg.chat.id;
+		if (!esDueno(senderChatId)) return;
 
 		const texto = msg.text.trim();
-		if (!estadosConversacion.has(chatId)) return;
+		if (!estadosConversacion.has(senderChatId)) return;
 
-		const estado = estadosConversacion.get(chatId);
+		const estado = estadosConversacion.get(senderChatId);
 
 		if (estado.paso === 'esperando_descripcion') {
-			await botInstance.sendMessage(chatId, '⏳ Procesando descripción con IA...');
-			await procesarDescripcionLibre(chatId, texto);
+			await botInstance.sendMessage(senderChatId, '⏳ Procesando descripción con IA...');
+			await procesarDescripcionLibre(senderChatId, texto);
 			return;
 		}
 
@@ -350,21 +383,21 @@ async function iniciarBot(dbModule) {
 			const respuesta = texto.toLowerCase();
 
 			if (respuesta.includes('si') || respuesta.includes('sí')) {
-				await guardarNeveraEnBD(chatId);
+				await guardarNeveraEnBD(senderChatId);
 				return;
 			}
 
 			if (respuesta.includes('no')) {
 				await eliminarFotoDeSupabase(estado.datos.nombreArchivo);
-				estadosConversacion.delete(chatId);
+				estadosConversacion.delete(senderChatId);
 				await botInstance.sendMessage(
-					chatId,
+					senderChatId,
 					'❌ Cancelado. La foto fue eliminada.\nEnvía una nueva foto cuando quieras.'
 				);
 				return;
 			}
 
-			await botInstance.sendMessage(chatId, '⚠️ Responde *SÍ* para guardar o *NO* para cancelar.', {
+			await botInstance.sendMessage(senderChatId, '⚠️ Responde *SÍ* para guardar o *NO* para cancelar.', {
 				parse_mode: 'Markdown'
 			});
 		}
@@ -507,46 +540,34 @@ async function iniciarBot(dbModule) {
 	});
 
 	botInstance.onText(/^\/tomar(?:\s+(.+))?$/, async (msg, match) => {
-		const chatId = msg.chat.id;
-		if (!esVendedor(chatId)) return;
-
-		const telefonoCliente = match && match[1] ? match[1].trim().replace(/\D/g, '') : null;
-		if (!telefonoCliente) {
-			await botInstance.sendMessage(
-				chatId,
-				'⚠️ Uso: /tomar [telefono]\nEjemplo: /tomar 573001234567'
-			);
-			return;
-		}
-
-		const conversacion = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
-		if (!conversacion) {
-			await botInstance.sendMessage(chatId, '❌ No se encontró conversación activa para ese número.');
-			return;
-		}
-
-		const asignado = await dbModule.asignarVendedor(conversacion.id, msg.chat.id);
-		if (asignado === false) {
-			await botInstance.sendMessage(chatId, '⚠️ Ese lead ya fue tomado por otro vendedor.');
-			return;
-		}
-
-		relayActivo.set(String(msg.chat.id), telefonoCliente);
-
-		await botInstance.sendMessage(
-			chatId,
-			`✅ *Lead tomado exitosamente*\n\n📱 Cliente: +${telefonoCliente}\n💬 Ahora todo lo que escribas aquí llegará al cliente por WhatsApp.\n\n*Comandos disponibles:*\n/cerrar - Marcar venta como cerrada\n/liberar - Devolver lead al bot\n/historial - Ver conversación anterior\n/pausa - Bot no responde pero tú tampoco (cliente en espera)`,
-			{ parse_mode: 'Markdown' }
-		);
+		// Comando deprecado en el nuevo modelo de hilos
+		await botInstance.sendMessage(msg.chat.id, '⚠️ Comando obsoleto. Ahora simplemente responde dentro del Hilo/Topic del cliente para hablar con él.', { reply_to_message_id: msg.message_id });
 	});
 
 	botInstance.onText(/^\/cerrar$/, async (msg) => {
-		const chatId = msg.chat.id;
-		if (!esVendedor(chatId)) return;
+		const isSuperGroup = Number(msg.chat.id) === Number(SUPER_GROUP_ID);
+		const threadId = msg.message_thread_id;
 
-		const telefonoCliente = relayActivo.get(String(msg.chat.id));
+		if (!isSuperGroup || !threadId) {
+			await botInstance.sendMessage(msg.chat.id, '⚠️ Usa este comando dentro del Hilo/Topic del cliente que deseas cerrar.');
+			return;
+		}
+
+		let telefonoCliente = null;
+		for (const [tel, tId] of temporaryThreadMap.entries()) {
+			if (tId === threadId) {
+				telefonoCliente = tel;
+				break;
+			}
+		}
+
 		if (!telefonoCliente) {
-			await botInstance.sendMessage(chatId, '⚠️ No tienes ningún lead activo. Usa /tomar primero.');
+			const convDb = await dbModule.obtenerConversacionPorThreadId(threadId);
+			if (convDb) telefonoCliente = convDb.telefono;
+		}
+
+		if (!telefonoCliente) {
+			await botInstance.sendMessage(msg.chat.id, '⚠️ No se pudo identificar el cliente de este hilo.', { message_thread_id: threadId });
 			return;
 		}
 
@@ -558,10 +579,13 @@ async function iniciarBot(dbModule) {
 				conversacion.lead_score,
 				'cerrado'
 			);
+
+			// Agente de Memoria entra en acción asíncronamente
+			const Orchestrator = require('./agents/Orchestrator');
+			Orchestrator.aprenderDeConversacionCerrada(telefonoCliente, conversacion.mensajes, dbModule);
 		}
 
-		relayActivo.delete(String(msg.chat.id));
-		await botInstance.sendMessage(chatId, '✅ Venta marcada como cerrada. ¡Excelente trabajo! 🎉');
+		await botInstance.sendMessage(msg.chat.id, '✅ Venta marcada como cerrada. ¡Excelente trabajo! 🎉 (Puedes cerrar este Hilo)', { message_thread_id: threadId });
 
 		await whatsappMod.enviarMensaje(
 			telefonoCliente,
@@ -570,14 +594,28 @@ async function iniciarBot(dbModule) {
 	});
 
 	botInstance.onText(/^\/liberar$/, async (msg) => {
-		const chatId = msg.chat.id;
-		if (!esVendedor(chatId)) return;
+		const isSuperGroup = Number(msg.chat.id) === Number(SUPER_GROUP_ID);
+		const threadId = msg.message_thread_id;
 
-		const telefonoCliente = relayActivo.get(String(msg.chat.id));
-		if (!telefonoCliente) {
-			await botInstance.sendMessage(chatId, '⚠️ No tienes ningún lead activo.');
+		if (!isSuperGroup || !threadId) {
+			await botInstance.sendMessage(msg.chat.id, '⚠️ Usa este comando dentro del Hilo del cliente.');
 			return;
 		}
+
+		let telefonoCliente = null;
+		for (const [tel, tId] of temporaryThreadMap.entries()) {
+			if (tId === threadId) {
+				telefonoCliente = tel;
+				break;
+			}
+		}
+
+		if (!telefonoCliente) {
+			const convDb = await dbModule.obtenerConversacionPorThreadId(threadId);
+			if (convDb) telefonoCliente = convDb.telefono;
+		}
+
+		if (!telefonoCliente) return;
 
 		const conversacion = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
 		if (conversacion) {
@@ -587,11 +625,10 @@ async function iniciarBot(dbModule) {
 				conversacion.lead_score,
 				'activo'
 			);
-			await supabase.from('conversaciones').update({ vendedor_telegram_id: null }).eq('id', conversacion.id);
+			await dbModule.desasignarVendedor(conversacion.id);
 		}
 
-		relayActivo.delete(String(msg.chat.id));
-		await botInstance.sendMessage(chatId, '✅ Lead liberado. El bot retomará la conversación.');
+		await botInstance.sendMessage(msg.chat.id, '✅ Lead devuelto al bot. El bot retomará la conversación.', { message_thread_id: threadId });
 
 		await whatsappMod.enviarMensaje(
 			telefonoCliente,
@@ -600,14 +637,25 @@ async function iniciarBot(dbModule) {
 	});
 
 	botInstance.onText(/^\/pausa$/, async (msg) => {
-		const chatId = msg.chat.id;
-		if (!esVendedor(chatId)) return;
+		const isSuperGroup = Number(msg.chat.id) === Number(SUPER_GROUP_ID);
+		const threadId = msg.message_thread_id;
 
-		const telefonoCliente = relayActivo.get(String(chatId));
-		if (!telefonoCliente) {
-			await botInstance.sendMessage(chatId, '⚠️ No tienes ningún lead activo.');
-			return;
+		if (!isSuperGroup || !threadId) return;
+
+		let telefonoCliente = null;
+		for (const [tel, tId] of temporaryThreadMap.entries()) {
+			if (tId === threadId) {
+				telefonoCliente = tel;
+				break;
+			}
 		}
+		
+		if (!telefonoCliente) {
+			const convDb = await dbModule.obtenerConversacionPorThreadId(threadId);
+			if (convDb) telefonoCliente = convDb.telefono;
+		}
+
+		if (!telefonoCliente) return;
 
 		await whatsappMod.enviarMensaje(
 			telefonoCliente,
@@ -615,26 +663,35 @@ async function iniciarBot(dbModule) {
 		);
 
 		await botInstance.sendMessage(
-			chatId,
-			'⏸️ Conversación en pausa.\nEl cliente fue notificado.\nEscribe cualquier mensaje para retomar.'
+			msg.chat.id,
+			'⏸️ Conversación en pausa.\nEl cliente fue notificado.\nEscribe cualquier mensaje para retomar.',
+			{ message_thread_id: threadId }
 		);
 	});
 
 	botInstance.onText(/^\/historial$/, async (msg) => {
-		const chatId = msg.chat.id;
-		if (!esVendedor(chatId)) return;
+		const isSuperGroup = Number(msg.chat.id) === Number(SUPER_GROUP_ID);
+		const threadId = msg.message_thread_id;
 
-		const telefonoCliente = relayActivo.get(String(msg.chat.id));
-		if (!telefonoCliente) {
-			await botInstance.sendMessage(chatId, '⚠️ No tienes ningún lead activo.');
-			return;
+		if (!isSuperGroup || !threadId) return;
+
+		let telefonoCliente = null;
+		for (const [tel, tId] of temporaryThreadMap.entries()) {
+			if (tId === threadId) {
+				telefonoCliente = tel;
+				break;
+			}
 		}
+
+		if (!telefonoCliente) {
+			const convDb = await dbModule.obtenerConversacionPorThreadId(threadId);
+			if (convDb) telefonoCliente = convDb.telefono;
+		}
+
+		if (!telefonoCliente) return;
 
 		const conversacion = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
-		if (!conversacion) {
-			await botInstance.sendMessage(chatId, '❌ No se encontró la conversación para ese lead.');
-			return;
-		}
+		if (!conversacion) return;
 
 		const mensajes = conversacion.mensajes || [];
 		const ultimos = mensajes.slice(-10);
@@ -644,8 +701,9 @@ async function iniciarBot(dbModule) {
 			return `💬 ${m.content}`;
 		}).join('\n\n');
 
-		await botInstance.sendMessage(chatId, `📋 *Últimos mensajes:*\n\n${mensajesFormateados || 'Sin historial reciente.'}`, {
-			parse_mode: 'Markdown'
+		await botInstance.sendMessage(msg.chat.id, `📋 *Últimos mensajes:*\n\n${mensajesFormateados || 'Sin historial reciente.'}`, {
+			parse_mode: 'Markdown',
+			message_thread_id: threadId
 		});
 	});
 
@@ -660,8 +718,10 @@ async function iniciarBot(dbModule) {
 		if (esVendedor(chatId) && !esDueno(chatId)) {
 			const menuVendedor =
 				'👋 *Panel de Vendedor - Neveras Bot*\n\n' +
-				'📋 *Comandos disponibles:*\n' +
-				'/tomar [telefono] - Tomar un lead asignado\n' +
+				'📋 *Instrucciones Súper Grupo:*\n' +
+				'Cuando un lead sea asignado o escalado, el bot creará un Hilo (Topic) nuevo.\n' +
+				'Simplemente entra al hilo y responde. Lo que escribas se enviará al cliente.\n\n' +
+				'📋 *Comandos dentro del hilo del cliente:*\n' +
 				'/historial - Ver conversación del cliente\n' +
 				'/cerrar - Marcar venta como exitosa\n' +
 				'/liberar - Devolver lead al bot\n' +
@@ -694,33 +754,44 @@ async function iniciarBot(dbModule) {
 	return botInstance;
 }
 
+// Reenviar mensaje al vendedor modificado para crear Hilos (Topics)
 async function reenviarMensajeAVendedor(telefonoCliente, mensajeCliente, nombreCliente, dbModule) {
 	try {
 		const conversacion = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
-		if (!conversacion || !conversacion.vendedor_telegram_id) return false;
+		if (!conversacion) return false;
 
-		const telegramIdVendedor = conversacion.vendedor_telegram_id;
-		const vendedorTieneRelay = relayActivo.get(String(telegramIdVendedor)) === telefonoCliente;
+		const superGroupId = process.env.TELEGRAM_OWNER_CHAT_ID;
+		let threadId = temporaryThreadMap.get(telefonoCliente) || conversacion.telegram_thread_id;
 
-		if (!vendedorTieneRelay && telegramIdVendedor) {
-			relayActivo.set(String(telegramIdVendedor), telefonoCliente);
-			await botInstance.sendMessage(
-				telegramIdVendedor,
-				`⚡ *Reconexión automática*\n\nEl cliente +${telefonoCliente} acaba de escribir.\nEl relay fue restaurado automáticamente.\n\n💬 Su mensaje:\n"${mensajeCliente}"`,
-				{ parse_mode: 'Markdown' }
-			);
-			return true;
+		// Si no hay Topic creado para este cliente, crearlo
+		if (!threadId) {
+			const topicName = `📞 Lead: ${nombreCliente || telefonoCliente}`;
+			try {
+				const topic = await botInstance.createForumTopic(superGroupId, topicName);
+				threadId = topic.message_thread_id;
+				temporaryThreadMap.set(telefonoCliente, threadId);
+				
+				// Intentar guardar en BD
+				await dbModule.vincularThreadAConversacion(conversacion.id, threadId);
+
+				const intro = `🛎️ *NUEVO LEAD ESCALADO* 🛎️\n\n👤 *Nombre:* ${nombreCliente || 'Desconocido'}\n📱 *Teléfono:* +${telefonoCliente}\n\nEscriban en este hilo para responderle al cliente.`;
+				await botInstance.sendMessage(superGroupId, intro, { parse_mode: 'Markdown', message_thread_id: threadId });
+			} catch (topicError) {
+				console.error('Error creando Forum Topic (Asegúrate de que el bot sea admin del grupo y Topics estén permitidos):', topicError.message);
+				return false;
+			}
 		}
 
+		// Enviar mensaje del cliente al hilo
 		await botInstance.sendMessage(
-			conversacion.vendedor_telegram_id,
-			`💬 *${nombreCliente}:*\n${mensajeCliente}`,
-			{ parse_mode: 'Markdown' }
+			superGroupId,
+			`💬 *Cliente:* ${mensajeCliente}`,
+			{ parse_mode: 'Markdown', message_thread_id: threadId }
 		);
 
 		return true;
 	} catch (error) {
-		console.error('Error al reenviar mensaje a vendedor:', error);
+		console.error('Error al reenviar mensaje a vendedor en topic:', error);
 		return false;
 	}
 }

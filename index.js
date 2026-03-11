@@ -11,6 +11,7 @@ const telegram = require('./src/telegram');
 const escalacion = require('./src/escalacion');
 const envios = require('./src/envios');
 const followup = require('./src/followup');
+const MarketingAgent = require('./src/agents/MarketingAgent');
 const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
@@ -629,6 +630,9 @@ process.on('unhandledRejection', (reason) => {
 async function iniciarServidor() {
 	await telegram.iniciarBot(db);
 	followup.iniciarSistemaFollowUp(db, whatsapp, ai);
+
+	// Inicializar el Community Manager (Agente de Mkt) para publicaciones de FB diarias
+	MarketingAgent.iniciarActividadDiaria(db);
 
 	setInterval(() => {
 		console.log('[Reservas] Verificación de reservas expiradas:', new Date().toISOString());
