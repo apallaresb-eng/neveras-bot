@@ -97,22 +97,45 @@ function calcularLeadScore(historialMensajes, intencionActual, scoreActual) {
 // 3. Generar mensaje de follow-up
 async function generarMensajeFollowUp(historialMensajes, horasTranscurridas) {
   try {
-    // Obtener el último mensaje del cliente para personalizar
-    const ultimoMensajeCliente = historialMensajes
-      .filter(msg => msg.role === 'user')
-      .slice(-1)[0]?.content || '';
+    // Extraer contexto usando los últimos mensajes
+    const conversacionTexto = historialMensajes.slice(-8).map(m => `${m.role === 'user' ? 'Cliente' : 'Agente'}: ${m.content}`).join('\n');
     
     // Construir prompt según las horas transcurridas
     let promptFollowUp = '';
     
     if (horasTranscurridas <= 24) {
-      promptFollowUp = `Eres Compra Venta Jireh, asesor de neveras industriales. El cliente mostró interés pero no ha finalizado su compra. Su último mensaje fue: "${ultimoMensajeCliente}". 
+      promptFollowUp = `Eres Compra Venta Jireh, asesor de neveras industriales. El cliente mostró interés pero no ha finalizado su compra.
       
-Genera un mensaje de seguimiento amigable y suave, recordándole que el stock es limitado y que estás disponible para cualquier duda. Tono colombiano cálido, máximo 2 párrafos cortos. Usa "usted".`;
+Historial de conversación:
+${conversacionTexto}
+
+Instrucciones:
+Genera un mensaje de seguimiento amigable y corto (máx 2 párrafos).
+1. Personaliza el mensaje según el tipo de negocio del cliente si se mencionó.
+2. Si el cliente mencionó una nevera específica, haz alusión a ella.
+3. Recuerda que el stock es limitado. Tono colombiano cálido, usa "usted".`;
+    } else if (horasTranscurridas <= 48) {
+      promptFollowUp = `Eres Compra Venta Jireh, asesor de neveras industriales. El cliente mostró interés hace más de 24 horas.
+      
+Historial de conversación:
+${conversacionTexto}
+
+Instrucciones:
+Genera un mensaje de seguimiento con urgencia moderada (máx 2 párrafos).
+1. Personaliza el mensaje según el tipo de negocio del cliente si se mencionó.
+2. Si le interesó una nevera en particular, menciónala.
+3. Menciona que el stock rota rápido. Tono colombiano cercano, usa "usted".`;
     } else {
-      promptFollowUp = `Eres Compra Venta Jireh, asesor de neveras industriales. El cliente mostró interés hace más de 24 horas pero no finalizó su compra. Su último mensaje fue: "${ultimoMensajeCliente}".
+      promptFollowUp = `Eres Compra Venta Jireh, asesor de neveras industriales. Han pasado 72 horas y el cliente tiene alto interés.
       
-Genera un mensaje de seguimiento con urgencia moderada, mencionando que hay neveras nuevas en inventario hoy y que el stock rota rápido. Tono colombiano profesional pero cercano, máximo 2 párrafos cortos. Usa "usted".`;
+Historial de conversación:
+${conversacionTexto}
+
+Instrucciones:
+Genera un último mensaje de seguimiento muy persuasivo y resolutivo (máx 2 párrafos).
+1. Personaliza el mensaje según el tipo de negocio del cliente si se mencionó.
+2. Si el cliente tiene una nevera en mira, menciónala.
+3. Pregunta si tiene alguna duda final y ponte a disposición. Tono colombiano experto y empatíco, usa "usted".`;
     }
     
     // Llamar a Groq

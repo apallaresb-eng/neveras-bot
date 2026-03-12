@@ -321,12 +321,24 @@ app.post('/webhook', async (req, res) => {
 				}
 
 			} catch (err) {
-				console.error('Error procesando audio:', err.message, err.stack);
-				await enviarMensaje(
-					datos.telefono,
-					'No pude escuchar bien el audio 😅 ¿Me lo puedes escribir?'
-				);
-				return;
+				console.error('Error procesando audio con Groq SDK, intentando fallback:', err.message);
+				
+				try {
+					const transcripcionFallback = await ai.transcribirAudio(datos.mediaUrl);
+					if (transcripcionFallback && transcripcionFallback.length > 0) {
+						datos.mensaje = transcripcionFallback;
+						console.log('Transcripción fallback exitosa:', transcripcionFallback);
+					} else {
+						throw new Error('Fallback sin transcripción');
+					}
+				} catch (fallbackErr) {
+					console.error('Error en fallback de audio:', fallbackErr.message);
+					await enviarMensaje(
+						datos.telefono,
+						'No pude escuchar bien el audio 😅 ¿Me lo puedes escribir?'
+					);
+					return;
+				}
 			}
 		}
 
@@ -494,7 +506,7 @@ app.post('/webhook', async (req, res) => {
 				// REGLA 3: Buscar la nevera mas relevante para este cliente
 				const { data: neveras } = await supabase
 					.from('neveras')
-					.select('nombre, tipo, uso_recomendado, descripcion, foto_url')
+					.select('id, nombre, tipo, uso_recomendado, descripcion, foto_url')
 					.eq('disponible', true)
 					.not('foto_url', 'is', null);
 
@@ -503,49 +515,59 @@ app.post('/webhook', async (req, res) => {
 				const msgL = mensajeCliente.toLowerCase();
 				const respL = respuestaBot.toLowerCase();
 
-				// Mapa de palabras clave por tipo de negocio
-				const mapaNegocios = {
-					'horizontal': ['carnicería', 'carniceria', 'horizontal', 'carne', 'res', 'cerdo'],
-					'vertical': ['restaurante', 'cocina', 'vertical', 'farmacia', 'droguería', 'drogueria'],
-					'exhibidora': ['panadería', 'panaderia', 'pastelería', 'pasteleria', 'exhibidora', 'tienda', 'minimercado'],
-					'congelador': ['heladería', 'heladeria', 'congelador', 'helados', 'congelado']
-				};
-
-				// Determinar qué tipo busca el cliente
-				let tipoRequerido = null;
-				for (const [tipo, palabras] of Object.entries(mapaNegocios)) {
-					if (palabras.some(p => msgL.includes(p) || respL.includes(p))) {
-						tipoRequerido = tipo;
-						break;
-					}
-				}
-
-				// Buscar nevera que coincida con el tipo requerido
 				let neveraElegida = null;
 
-				if (tipoRequerido) {
-					neveraElegida = neveras.find(n => {
-						const tipoN = (n.tipo || '').toLowerCase();
-						const usoN = (n.uso_recomendado || '').toLowerCase();
-						const nomN = (n.nombre || '').toLowerCase();
-						return tipoN.includes(tipoRequerido) ||
-							usoN.includes(tipoRequerido) ||
-							nomN.includes(tipoRequerido);
-					});
+				// 1. Intentar buscar por el ID específico mencionado por Don Carlos en su respuesta
+				const matchId = respuestaBot.match(/\[ID:(\d+)\]/i);
+				if (matchId) {
+					const idMencionado = parseInt(matchId[1], 10);
+					neveraElegida = neveras.find(n => n.id === idMencionado);
 				}
 
-				// Si no encontró por tipo, buscar por nombre en la respuesta
+				// 2. Fallback: Buscar por tipo de negocio o coincidencia de nombre
 				if (!neveraElegida) {
-					neveraElegida = neveras.find(n =>
-						respL.includes((n.nombre || '').toLowerCase())
-					);
+					// Mapa de palabras clave por tipo de negocio
+					const mapaNegocios = {
+						'horizontal': ['carnicería', 'carniceria', 'horizontal', 'carne', 'res', 'cerdo'],
+						'vertical': ['restaurante', 'cocina', 'vertical', 'farmacia', 'droguería', 'drogueria'],
+						'exhibidora': ['panadería', 'panaderia', 'pastelería', 'pasteleria', 'exhibidora', 'tienda', 'minimercado'],
+						'congelador': ['heladería', 'heladeria', 'congelador', 'helados', 'congelado']
+					};
+
+					// Determinar qué tipo busca el cliente
+					let tipoRequerido = null;
+					for (const [tipo, palabras] of Object.entries(mapaNegocios)) {
+						if (palabras.some(p => msgL.includes(p) || respL.includes(p))) {
+							tipoRequerido = tipo;
+							break;
+						}
+					}
+
+					// Buscar nevera que coincida con el tipo requerido
+					if (tipoRequerido) {
+						neveraElegida = neveras.find(n => {
+							const tipoN = (n.tipo || '').toLowerCase();
+							const usoN = (n.uso_recomendado || '').toLowerCase();
+							const nomN = (n.nombre || '').toLowerCase();
+							return tipoN.includes(tipoRequerido) ||
+								usoN.includes(tipoRequerido) ||
+								nomN.includes(tipoRequerido);
+						});
+					}
+
+					// Si no encontró por tipo, buscar por nombre en la respuesta
+					if (!neveraElegida) {
+						neveraElegida = neveras.find(n =>
+							respL.includes((n.nombre || '').toLowerCase())
+						);
+					}
 				}
 
 				// Solo enviar si encontró coincidencia real
 				if (neveraElegida) {
-					// Esperar 1 segundo antes de enviar la foto (más natural)
-					await new Promise(r => setTimeout(r, 1000));
-					await enviarMensajeConImagen(
+					// 3. Esperar 1.5 segundos antes de enviar la foto (más natural)
+					await new Promise(r => setTimeout(r, 1500));
+					await whatsapp.enviarMensajeConImagen(
 						telefono,
 						`📸 *${neveraElegida.nombre}*\n_Esta es la que tenemos disponible_`,
 						neveraElegida.foto_url

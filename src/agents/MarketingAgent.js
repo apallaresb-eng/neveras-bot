@@ -31,11 +31,7 @@ class MarketingAgent extends BaseAgent {
 
       // Tomamos la cantidad deseada (25). Si el stock es menor, repetimos neveras aleatoriamente
       const cantidadDeseada = 25;
-      const seleccionadas = [];
-      for(let i = 0; i < cantidadDeseada; i++) {
-        const randomIndex = Math.floor(Math.random() * items.length);
-        seleccionadas.push(items[randomIndex]);
-      }
+      const seleccionadas = this.seleccionarSinExcesivasRepeticiones(items, cantidadDeseada);
 
       const bot = telegramMod.obtenerInstanciaBot();
       const superGroupId = process.env.TELEGRAM_SUPER_GROUP_ID;
@@ -86,6 +82,34 @@ class MarketingAgent extends BaseAgent {
     }
   }
 
+  seleccionarSinExcesivasRepeticiones(items, cantidad) {
+    const seleccionadas = [];
+    const conteoRepeticiones = new Map();
+    const maxPorNevera = Math.ceil(cantidad / items.length) + 1;
+
+    // Primera pasada: una de cada una, orden aleatorio
+    const shuffled = [...items].sort(() => Math.random() - 0.5);
+    for (const item of shuffled) {
+      if (seleccionadas.length >= cantidad) break;
+      seleccionadas.push(item);
+      conteoRepeticiones.set(item.id, 1);
+    }
+
+    // Segunda pasada si aún faltan
+    let intentos = 0;
+    while (seleccionadas.length < cantidad && intentos < 1000) {
+      const item = items[Math.floor(Math.random() * items.length)];
+      const actual = conteoRepeticiones.get(item.id) || 0;
+      if (actual < maxPorNevera) {
+        seleccionadas.push(item);
+        conteoRepeticiones.set(item.id, actual + 1);
+      }
+      intentos++;
+    }
+
+    return seleccionadas;
+  }
+
   async redactarCopyParaRedes(nevera, variacionEstilo) {
     const systemPrompt = `Eres el Community Manager estrella de "Compra Venta Jireh" en Bogotá.
 TU OBJETIVO: Escribir un Post/Copy altamente persuasivo para Facebook vendiendo una nevera industrial remanufacturada.
@@ -109,7 +133,7 @@ TUS DATOS SOBRE LA NEVERA:
 - Tipo y Capacidad: ${nevera.tipo || 'Industrial'} - ${nevera.capacidad_litros ? nevera.capacidad_litros + 'L' : '?'}
 - Atributos Ténicos: ${nevera.especificaciones || 'Reparada y funcionando 10/10'}
 - Para qué sirve: Ideal para ${nevera.uso_recomendado || 'comercios'}
-- Precio: ${nevera.precio ? '$' + nevera.precio.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.') + ' COP' : 'A consultar'}
+- Precio: ${nevera.precio ? '$' + nevera.precio.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ' COP' : 'A consultar'}
 
 📝 Redacta el Copy listo para Copy-Paste a Facebook (sin comillas de markdown, ni intro tuya).`;
 

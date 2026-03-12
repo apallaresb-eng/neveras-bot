@@ -877,8 +877,8 @@ async function notificarLeadCaliente(datosLead) {
 			`❄️ *Interesado en:* ${datosLead.neveraDeInteres}\n` +
 			`📊 *Score:* ${datosLead.leadScore}/100\n\n` +
 			`💬 *Resumen:* ${datosLead.resumenTexto}\n\n` +
-			`👉 *Para atenderle:* /tomar ${datosLead.telefono}\n` +
-			`_(Escribe ese comando para iniciar el chat con el cliente)_`;
+			`👉 *Para atenderle:* Ve al SuperGrupo → busca el Hilo del cliente y escribe directamente ahí.\n` +
+			`_(Si el cliente vuelve a escribir, el hilo se crea automáticamente)_`;
 
 		for (const chatId of destinatarios) {
 			try {

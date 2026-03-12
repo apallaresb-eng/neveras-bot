@@ -16,16 +16,20 @@ class Orchestrator extends BaseAgent {
       let contextoInvestigador = '';
 
       // 2. ¿Requiere Inteligencia de Mercado?
-      if (intencion === 'precio' || intencion === 'objecion_competencia' || intencion === 'garantia') {
+      if (intencion === 'precio' || intencion === 'objecion_competencia' || intencion === 'garantia' || intencion === 'menciona_competidor') {
         const analisis = await ResearcherAgent.consultarDudaCliente(mensajeCliente, historial);
         if (analisis) {
           contextoInvestigador = `[CONTEXTO DE MERCADO DEL INVESTIGADOR: ${analisis}]`;
         }
       }
 
+      // Extraer contexto del cliente para inyectar en el prompt de ventas (Mejora 3)
+      const datosCliente = await this.extraerContextoRapido(historial, mensajeCliente);
+      const strDatosCliente = `[CONTEXTO CLIENTE: Nombre: ${datosCliente.nombre_cliente || 'Desconocido'}, Negocio: ${datosCliente.tipo_negocio || 'Desconocido'}, Equipo buscado: ${datosCliente.equipo_interes || 'Desconocido'}, Ciudad: ${datosCliente.ciudad || 'Desconocido'}]`;
+
       // 3. Generación de Respuesta por el SalesAgent (El Cerrador)
       // Agregamos los insights históricos + el contexto actual en tiempo real
-      const contextoTotal = `[INSIGHTS APRENDIDOS DEL PASADO: ${dbInsights}]\n${contextoInvestigador}`;
+      const contextoTotal = `[INSIGHTS APRENDIDOS DEL PASADO: ${dbInsights}]\n${contextoInvestigador}\n${strDatosCliente}`;
       const respuestaPropuesta = await SalesAgent.responderVenta(
         mensajeCliente, 
         historial, 
@@ -48,11 +52,12 @@ class Orchestrator extends BaseAgent {
           // Le pasamos la sugerencia como nueva instrucción interna para que el bot RESPONDA mejor,
           // nunca como mensaje directo al cliente.
           const mensajeCorregido = await SalesAgent.responderVenta(
-            `CORRECCIÓN INTERNA (NO REVELAR AL CLIENTE). Responde de nuevo, pero esta vez sigue esta guía: "${auditoria.sugerencia_correccion}". El mensaje original del cliente era: "${mensajeCliente}"`,
+            mensajeCliente,
             historial,
             inventarioDisponible,
             contextoTotal,
-            leadScore
+            leadScore,
+            auditoria.sugerencia_correccion
           );
           if (mensajeCorregido) {
             return { respuesta: mensajeCorregido, intencionDetectada: intencion, auditado: true };
@@ -79,20 +84,53 @@ class Orchestrator extends BaseAgent {
   detectarIntencionBasica(mensaje) {
     const msj = mensaje.toLowerCase();
     
-    if (msj.includes('caro') || msj.includes('competencia') || msj.includes('olx') || msj.includes('mercado libre') || msj.includes('rebaja')) {
-      return 'objecion_competencia';
+    // Intenciones de alta prioridad (transaccionales)
+    if (msj.includes('pagar') || msj.includes('transferencia') || msj.includes('compro') || msj.includes('mándela')) {
+      return 'cierre';
     }
     if (msj.includes('cuánto') || msj.includes('precio') || msj.includes('valor')) {
       return 'precio';
     }
-    if (msj.includes('pagar') || msj.includes('transferencia') || msj.includes('compro') || msj.includes('mándela')) {
-      return 'cierre';
+    // Intenciones agregadas en la mejora (y objeciones)
+    if (msj.includes('caro') || msj.includes('competencia') || msj.includes('olx') || msj.includes('mercado libre') || msj.includes('rebaja')) {
+      return 'menciona_competidor';
     }
     if (msj.includes('garantía') || msj.includes('daña') || msj.includes('repuestos')) {
       return 'garantia';
     }
+    if (msj.includes('envío') || msj.includes('envio') || msj.includes('flete') || msj.includes('despacho')) {
+      return 'pide_envio';
+    }
+    if (msj.includes('foto') || msj.includes('imagen') || msj.includes('verla')) {
+      return 'solicita_foto';
+    }
+    if (msj.includes('medida') || msj.includes('ancho') || msj.includes('alto') || msj.includes('consume') || msj.includes('motor')) {
+      return 'pregunta_tecnica';
+    }
+    if (msj.includes('panadería') || msj.includes('panaderia') || msj.includes('carnicería') || msj.includes('tienda') || msj.includes('restaurante') || msj.includes('negocio')) {
+      return 'menciona_negocio_especifico';
+    }
+    if (msj.includes('hola') || msj.includes('buenas') || msj.includes('buenos dias') || msj.includes('buenos días') || msj.includes('buenas tardes')) {
+      return 'saludo_inicial';
+    }
     
     return 'exploracion';
+  }
+
+  async extraerContextoRapido(historial, mensajeCliente) {
+    try {
+      const msj = [
+        { role: 'system', content: `Eres un extractor de contexto de ventas JSON. Analiza la conversación y extrae estos campos si estuvieron explícitamente mencionados, de lo contrario devuelve "Desconocido". Responde ÚNICAMENTE con JSON válido sin formato markdown de bloques de código: { "nombre_cliente": "", "tipo_negocio": "", "equipo_interes": "", "ciudad": "" }` },
+        ...this.formatearHistorial(historial, 6),
+        { role: 'user', content: mensajeCliente }
+      ];
+      let jsonText = await this.razonar(msj, 0.1, 200);
+      jsonText = jsonText.replace(/```json/g, '').replace(/```/g, '').trim();
+      return JSON.parse(jsonText || '{}');
+    } catch(e) {
+      console.error('[Orchestrator] Error extrayendo contexto:', e);
+      return {};
+    }
   }
 
   // Se llama cuando un operador o el sistema cierra un ticket para aprender de él

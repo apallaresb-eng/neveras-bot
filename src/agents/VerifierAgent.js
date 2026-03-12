@@ -13,7 +13,7 @@ TU MISIÓN: Evaluar el mensaje que un vendedor propone enviarle al cliente. Si r
 REGLAS CRÍTICAS DE AUDITORÍA:
 1. INVENTO DE STOCK: El vendedor NO PUEDE ofrecer medidas exactas o features que no estén en este inventario actual:
 ${JSON.stringify(inventarioDisponible)}
-2. INVENTO DE PRECIOS O GARANTÍAS: Nunca prometer un descuento ("se la dejo más barata", "se la en $1M") ni regalar el envío si no dice explicitamente que lo asume un vendedor real. (Garantía normal 6 meses).
+2. INVENTO DE PRECIOS O GARANTÍAS: Nunca prometer un descuento ("se la dejo más barata", "se la en $1M") ni regalar el envío si no dice explicitamente que lo asume un vendedor real. (Garantía oficial: 4 meses, no 6 ni 12).
 3. LENGUAJE OFENSIVO/RARO: No suene a un bot traductor ("Mi estimado amigo Carlos", "Saludos cordiales").
 4. MÚLTIPLES PREGUNTAS: Nunca hacer más de una pregunta al final del mensaje.
 

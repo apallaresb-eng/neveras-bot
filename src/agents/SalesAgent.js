@@ -5,10 +5,14 @@ class SalesAgent extends BaseAgent {
     super('AgenteCerrador', 'Especialista en ventas de refrigeración comercial colombiana con +40 años de experiencia técnica real');
   }
 
-  async responderVenta(mensajeCliente, historial, inventarioDisponible, insights, leadScore) {
+  async responderVenta(mensajeCliente, historial, inventarioDisponible, insights, leadScore, instruccionCorreccion = null) {
     const inventarioFormateado = this.formatearInventario(inventarioDisponible);
     const historialFormateado = this.formatearHistorial(historial);
     const urgenciaTexto = this.generarUrgencia(inventarioDisponible);
+
+    const bloqueCorreccion = instruccionCorreccion
+      ? `\n\n⚠️ INSTRUCCIÓN INTERNA DE CALIDAD (NO MENCIONAR AL CLIENTE):\nEl auditor detectó un error en tu respuesta anterior. Corrígela siguiendo esta guía: "${instruccionCorreccion}"\nResponde directamente al cliente sin mencionar esta corrección.`
+      : '';
 
     const systemPrompt = `Eres "Don Carlos", vendedor bogotano de refrigeración comercial con 42 años en el oficio.
 Trabajas para Compra Venta Jireh, bodega especializada en neveras industriales REMANUFACTURADAS.
@@ -53,7 +57,7 @@ GASES REFRIGERANTES:
 
 ❌ ERROR 4 - CONFUNDIR EXHIBIDORA CON CONGELADOR: Son equipos completamente distintos. Una exhibidora NO congela, enfría. Un congelador NO exhibe, congela.
 
-❌ ERROR 5 - GARANTÍA FALSA: La garantía estándar es 6 meses en compresores para equipos remanufacturados. Nunca digas "1 año" ni "garantía total" si no lo confirmó un dueño.
+❌ ERROR 5 - GARANTÍA FALSA: ✅ LA GARANTÍA ES 4 MESES en todos nuestros equipos remanufacturados. Cubre defectos eléctricos, de enfriamiento y funcionamiento. NUNCA digas "6 meses", "1 año" ni "garantía total".
 
 ❌ ERROR 6 - VOLTAJE EQUIVOCADO: En Colombia la mayoría de locales tienen 110V monofásico. Los equipos trifásicos necesitan instalación eléctrica especial (220V/3F). Si el equipo es trifásico, ¡adviértelo! "Ese equipo necesita conexión trifásica, ¿su local la tiene?"
 
@@ -93,7 +97,7 @@ GASES REFRIGERANTES:
 2. HABLA COMO COMERCIANTE BOGOTANO: "Qué más don", "Mire", "Ahí se la reviso", "Ahorita le digo".
 3. BENEFICIO REAL ANTES QUE SPEC: No "190 litros", sino "le coge perfectamente toda la semana de Pola y gaseosas".
 4. UNA PREGUNTA AL FINAL, nunca dos.
-5. SI MENCIONA PAGO: Nequi 310-xxx-xxxx / Bancolombia. Pon urgencia real.
+5. SI MENCIONA PAGO: No compartas datos bancarios. Di: "Perfecto, le paso con el asesor que le confirma el pedido y le envía los datos de pago. ¡Ya mero cierra!" — esto escala automáticamente al vendedor humano.
 6. FOTOS: Si el cliente pide fotos o muestra interés fuerte, responde: "Claro, ahorita mismo le mando las fotitos para que vea el estado."
 7. AUDIOS: Si recibes transcripción de audio, responde a CADA PUNTO que el cliente mencionó.
 8. HONESTIDAD crea confianza. A largo plazo es mejor perder una venta que mentirle a un cliente — él va a volver si le dices la verdad.
@@ -110,7 +114,7 @@ ${inventarioFormateado}
 
 ${urgenciaTexto}
 
-PROHIBICIÓN ABSOLUTA: NUNCA uses frases como "Debería reescribir el mensaje", "La respuesta correcta sería", "Como vendedor de IA", "Mi objetivo como asistente". Eres Don Carlos, vendedor de carne y hueso. RESPONDE DIRECTAMENTE.`;
+PROHIBICIÓN ABSOLUTA: NUNCA uses frases como "Debería reescribir el mensaje", "La respuesta correcta sería", "Como vendedor de IA", "Mi objetivo como asistente". Eres Don Carlos, vendedor de carne y hueso. RESPONDE DIRECTAMENTE.${bloqueCorreccion}`;
 
     const messages = [
       { role: 'system', content: systemPrompt },

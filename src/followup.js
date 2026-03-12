@@ -20,9 +20,20 @@ async function revisarConversaciones(dbModule, whatsappModule, aiModule) {
 			const ahora = new Date();
 			const horasTranscurridas = (ahora.getTime() - ultimaActividad.getTime()) / 3600000;
 
-			if (horasTranscurridas >= 72) {
+			if (horasTranscurridas >= 96) {
 				await marcarConversacionInactiva(conv.id, dbModule);
 				inactivados += 1;
+				continue;
+			}
+
+			if (
+				horasTranscurridas >= 72 &&
+				(conv.followups_enviados || 0) >= 2 &&
+				(conv.followups_enviados || 0) < 3 &&
+				(conv.lead_score || 0) > 50
+			) {
+				await enviarFollowUp(conv, '72h', dbModule, whatsappModule, aiModule);
+				enviados += 1;
 				continue;
 			}
 
@@ -59,7 +70,7 @@ async function enviarFollowUp(conversacion, tipo, dbModule, whatsappModule, aiMo
 
 		let mensajeFollowUp = await aiModule.generarMensajeFollowUp(
 			historial,
-			tipo === '24h' ? 24 : 48
+			tipo === '24h' ? 24 : tipo === '48h' ? 48 : 72
 		);
 
 		if (tipo === '48h') {
