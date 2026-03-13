@@ -555,6 +555,8 @@ app.post('/webhook', async (req, res) => {
 		// ═══ LÓGICA INTELIGENTE DE FOTOS ═══
 		const debeEnviarFoto = async (mensajeCliente, respuestaBot, telefono) => {
 			try {
+				console.log('[Foto] Evaluando envío de foto para:', telefono);
+
 				// REGLA 1: Nunca enviar foto si el bot dice que no hay stock
 				const frasesNoStock = [
 					'no tenemos', 'no hay', 'sin stock', 'no contamos',
@@ -563,6 +565,7 @@ app.post('/webhook', async (req, res) => {
 				const botDiceNoHayStock = frasesNoStock.some(f =>
 					respuestaBot.toLowerCase().includes(f)
 				);
+				console.log('[Foto] Bot dice no hay stock:', botDiceNoHayStock);
 				if (botDiceNoHayStock) return;
 
 				// REGLA 2: Solo enviar foto cuando el bot recomienda algo concreto
@@ -573,6 +576,7 @@ app.post('/webhook', async (req, res) => {
 				const botRecomienda = frasesRecomienda.some(f =>
 					respuestaBot.toLowerCase().includes(f)
 				);
+				console.log('[Foto] Bot recomienda algo:', botRecomienda);
 				if (!botRecomienda) return;
 
 				// REGLA 3: Buscar la nevera mas relevante para este cliente
@@ -581,6 +585,8 @@ app.post('/webhook', async (req, res) => {
 					.select('id, nombre, tipo, uso_recomendado, descripcion, foto_url')
 					.eq('disponible', true)
 					.not('foto_url', 'is', null);
+
+				console.log('[Foto] Neveras con foto disponibles:', neveras?.length || 0);
 
 				if (!neveras || neveras.length === 0) return;
 
@@ -636,18 +642,21 @@ app.post('/webhook', async (req, res) => {
 				}
 
 				// Solo enviar si encontró coincidencia real
+				console.log('[Foto] Nevera elegida para enviar:', neveraElegida?.nombre || 'ninguna');
 				if (neveraElegida) {
 					// 3. Esperar 1.5 segundos antes de enviar la foto (más natural)
 					await new Promise(r => setTimeout(r, 1500));
+					console.log('[Foto] Intentando enviar foto URL:', neveraElegida.foto_url);
 					await whatsapp.enviarMensajeConImagen(
 						telefono,
 						`📸 *${neveraElegida.nombre}*\n_Esta es la que tenemos disponible_`,
 						neveraElegida.foto_url
 					);
+					console.log('[Foto] ✅ Foto enviada correctamente');
 				}
 
 			} catch(e) {
-				console.error('Error lógica foto:', e);
+				console.error('[Foto] ❌ Error enviando foto:', e.message);
 			}
 		};
 
