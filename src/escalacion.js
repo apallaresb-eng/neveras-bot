@@ -32,8 +32,11 @@ function evaluarEscalacion(conversacion, mensajeActual) {
 
 	const mensajeLower = String(mensajeActual || '').toLowerCase();
 	const tienePalabraClave = PALABRAS_COMPRA_INMEDIATA.some((palabra) => mensajeLower.includes(palabra));
+	const historial = Array.isArray(conversacion.mensajes) ? conversacion.mensajes : [];
+	const tieneHistorialMinimo = historial.length >= 6;
+	const escalaPorScore = (conversacion.lead_score || 0) >= 85 && tieneHistorialMinimo;
 
-	if ((conversacion.lead_score || 0) >= 70 || tienePalabraClave) {
+	if (tienePalabraClave || escalaPorScore) {
 		return true;
 	}
 
