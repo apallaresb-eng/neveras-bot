@@ -58,6 +58,45 @@ const obtenerContextoInventario = async () => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+function esperar(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function enviarMensajesDivididos(telefono, texto) {
+	const contenido = String(texto || '').trim();
+	if (!contenido) return;
+
+	const bloquesBase = contenido
+		.split(/\n\n+/)
+		.map((bloque) => bloque.trim())
+		.filter(Boolean);
+
+	const bloquesFinales = bloquesBase.flatMap((bloque) => {
+		if (bloque.length <= 300) return [bloque];
+
+		const partes = bloque
+			.split('. ')
+			.map((parte, idx, arr) => {
+				const textoParte = parte.trim();
+				if (!textoParte) return '';
+				if (idx < arr.length - 1 && !textoParte.endsWith('.')) {
+					return `${textoParte}.`;
+				}
+				return textoParte;
+			})
+			.filter(Boolean);
+
+		return partes.length > 0 ? partes : [bloque];
+	});
+
+	for (let i = 0; i < bloquesFinales.length; i++) {
+		await whatsapp.enviarMensaje(telefono, bloquesFinales[i]);
+		if (i < bloquesFinales.length - 1) {
+			await esperar(800);
+		}
+	}
+}
+
 function tiempoRelativo(fechaIso) {
 	if (!fechaIso) return 'Sin actividad';
 	const fecha = new Date(fechaIso);
@@ -270,82 +309,115 @@ app.post('/webhook', async (req, res) => {
 		const enviarMensaje = whatsapp.enviarMensaje;
 
 		// Si es audio → transcribir primero
-		if (datos.esAudio && datos.mediaUrl) {
+		if (datos.esAudio) {
+			if (!datos.mediaUrl) {
+				await enviarMensaje(
+					datos.telefono,
+					'No pude escuchar bien el audio 😅 ¿Me lo puedes escribir?'
+				);
+				return;
+			}
+
 			console.log('Audio recibido, transcribiendo...');
 
 			try {
-				// Descargar audio con autenticación Twilio
-				const credenciales = Buffer.from(
-					`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-				).toString('base64');
-
-				const audioRes = await fetch(datos.mediaUrl, {
-					headers: {
-						'Authorization': `Basic ${credenciales}`
-					}
-				});
-
-				if (!audioRes.ok) throw new Error(`HTTP ${audioRes.status}`);
-
-				const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
-				console.log('Audio descargado, tamaño:', audioBuffer.length, 'bytes');
-
-				// Guardar audio temporal
 				const fs = require('fs');
 				const path = require('path');
-				const tmpPath = path.join('/tmp', `audio_${Date.now()}.ogg`);
-				fs.writeFileSync(tmpPath, audioBuffer);
-
-				// Transcribir con Groq usando su SDK
 				const Groq = require('groq-sdk');
-				const groqClient = new Groq({
-					apiKey: process.env.GROQ_API_KEY
-				});
+				const groqClient = new Groq({ apiKey: process.env.GROQ_API_KEY });
+				let transcripcionExitosa = false;
+				let ultimoErrorAudio = null;
 
-				const transcripcion = await groqClient.audio.transcriptions.create({
-					file: fs.createReadStream(tmpPath),
-					model: 'whisper-large-v3',
-					language: 'es',
-					response_format: 'text'
-				});
+				for (let intento = 1; intento <= 2; intento++) {
+					try {
+						const credenciales = Buffer.from(
+							`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+						).toString('base64');
 
-				// Limpiar archivo temporal
-				try { fs.unlinkSync(tmpPath); } catch(e) {}
+						const audioRes = await fetch(datos.mediaUrl, {
+							headers: {
+								'Authorization': `Basic ${credenciales}`
+							}
+						});
 
-				console.log('Transcripción resultado:', transcripcion);
+						if (!audioRes.ok) throw new Error(`HTTP ${audioRes.status}`);
 
-				if (transcripcion && transcripcion.length > 0) {
-					datos.mensaje = transcripcion;
-				} else {
-					throw new Error('Sin transcripción');
-				}
+						const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+						console.log('Audio descargado, tamaño:', audioBuffer.length, 'bytes');
 
-			} catch (err) {
-				console.error('Error procesando audio con Groq SDK, intentando fallback:', err.message);
-				
-				try {
-					const transcripcionFallback = await ai.transcribirAudio(datos.mediaUrl);
-					if (transcripcionFallback && transcripcionFallback.length > 0) {
-						datos.mensaje = transcripcionFallback;
-						console.log('Transcripción fallback exitosa:', transcripcionFallback);
-					} else {
-						throw new Error('Fallback sin transcripción');
+						const tmpPath = path.join('/tmp', `audio_${Date.now()}.ogg`);
+						fs.writeFileSync(tmpPath, audioBuffer);
+
+						const transcripcion = await groqClient.audio.transcriptions.create({
+							file: fs.createReadStream(tmpPath),
+							model: 'whisper-large-v3',
+							language: 'es',
+							response_format: 'text'
+						});
+
+						try { fs.unlinkSync(tmpPath); } catch (e) {}
+
+						if (transcripcion && transcripcion.length > 0) {
+							datos.mensaje = transcripcion;
+							transcripcionExitosa = true;
+							console.log('Transcripción resultado:', transcripcion);
+							break;
+						}
+
+						throw new Error('Sin transcripción');
+					} catch (err) {
+						ultimoErrorAudio = err;
+						console.error(`[Audio] Intento ${intento} fallido para ${datos.telefono}:`, err.message);
+						if (intento === 1) {
+							await esperar(2000);
+						}
 					}
-				} catch (fallbackErr) {
-					console.error('Error en fallback de audio:', fallbackErr.message);
-					await enviarMensaje(
-						datos.telefono,
-						'No pude escuchar bien el audio 😅 ¿Me lo puedes escribir?'
-					);
-					return;
 				}
+
+				if (!transcripcionExitosa) {
+					let fallbackExitoso = false;
+					for (let intento = 1; intento <= 2; intento++) {
+						try {
+							const transcripcionFallback = await ai.transcribirAudio(datos.mediaUrl);
+							if (transcripcionFallback && transcripcionFallback.length > 0) {
+								datos.mensaje = transcripcionFallback;
+								fallbackExitoso = true;
+								console.log('Transcripción fallback exitosa:', transcripcionFallback);
+								break;
+							}
+							throw new Error('Fallback sin transcripción');
+						} catch (fallbackErr) {
+							ultimoErrorAudio = fallbackErr;
+							console.error(`[Audio] Fallback intento ${intento} fallido para ${datos.telefono}:`, fallbackErr.message);
+							if (intento === 1) {
+								await esperar(2000);
+							}
+						}
+					}
+
+					if (!fallbackExitoso) {
+						console.log(`[Audio] Falló transcripción para ${datos.telefono}:`, ultimoErrorAudio?.message || 'Sin detalle');
+						await enviarMensaje(
+							datos.telefono,
+							'No pude escuchar bien el audio 😅 ¿Me lo puedes escribir?'
+						);
+						return;
+					}
+				}
+			} catch (err) {
+				console.log(`[Audio] Falló transcripción para ${datos.telefono}:`, err.message);
+				await enviarMensaje(
+					datos.telefono,
+					'No pude escuchar bien el audio 😅 ¿Me lo puedes escribir?'
+				);
+				return;
 			}
 		}
 
 		if (!datos.mensaje) {
 			await whatsapp.enviarMensaje(
 				datos.telefono,
-				'Hola 👋 Por este canal solo podemos recibir mensajes de texto.\n¿En qué le puedo ayudar con nuestras neveras industriales? ❄️'
+				'Hola 👋 ¿En qué le puedo ayudar con nuestras neveras industriales? ❄️'
 			);
 			return;
 		}
@@ -464,7 +536,7 @@ app.post('/webhook', async (req, res) => {
 		await db.actualizarConversacion(conversacion.id, nuevoHistorial, nuevoScore, 'activo');
 
 		const debeEscalar = escalacion.evaluarEscalacion(
-			{ ...conversacion, lead_score: nuevoScore },
+			{ ...conversacion, mensajes: nuevoHistorial, lead_score: nuevoScore },
 			datos.mensaje
 		);
 
@@ -478,7 +550,7 @@ app.post('/webhook', async (req, res) => {
 			return;
 		}
 
-		await whatsapp.enviarMensaje(datos.telefono, respuesta);
+		await enviarMensajesDivididos(datos.telefono, respuesta);
 
 		// ═══ LÓGICA INTELIGENTE DE FOTOS ═══
 		const debeEnviarFoto = async (mensajeCliente, respuestaBot, telefono) => {
@@ -518,10 +590,10 @@ app.post('/webhook', async (req, res) => {
 				let neveraElegida = null;
 
 				// 1. Intentar buscar por el ID específico mencionado por Don Carlos en su respuesta
-				const matchId = respuestaBot.match(/\[ID:(\d+)\]/i);
+				const matchId = respuestaBot.match(/\[ID:([^\]]+)\]/i);
 				if (matchId) {
-					const idMencionado = parseInt(matchId[1], 10);
-					neveraElegida = neveras.find(n => n.id === idMencionado);
+					const idMencionado = String(matchId[1]).trim();
+					neveraElegida = neveras.find((n) => String(n.id) === idMencionado);
 				}
 
 				// 2. Fallback: Buscar por tipo de negocio o coincidencia de nombre
