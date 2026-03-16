@@ -115,7 +115,7 @@ async function estructurarDescripcionConIA(textoLibre) {
 		const completion = await groq.chat.completions.create({
 			model: 'llama-3.3-70b-versatile',
 			temperature: 0.1,
-			max_tokens: 400,
+			max_tokens: 600,
 			messages: [
 				{
 					role: 'system',
@@ -127,12 +127,23 @@ A partir de la descripción libre, extrae los campos y responde ÚNICAMENTE con 
 	"descripcion": "Descripción comercial atractiva de 1-2 oraciones para seducir al cliente. Corrige los errores de gramática y transcripción del audio.",
 	"especificaciones": "Especificaciones técnicas mencionadas (voltaje, gas, estado, temperatura, etc).",
 	"precio": número entero sin puntos ni letras (ej. 1500000),
-	"tipo": "horizontal" | "vertical" | "exhibidora" | "congelador",
+	"precio_minimo": número entero (85% del precio redondeado al millar si no se menciona explícitamente; null si precio es null),
+	"tipo": "horizontal" | "vertical" | "exhibidora" | "congelador" | "vitrina",
 	"uso_recomendado": "Tipo de negocio ideal (ej. Carnicería, Fruver, Droguería)",
-	"capacidad_litros": número entero o null
+	"capacidad_litros": número entero o null,
+	"temperatura_min": número entero en °C o null,
+	"temperatura_max": número entero en °C o null
 }
-Si no se dice explícitamente el precio o algún campo, trata de inferirlo lógicamente del contexto. Si es imposible, pon null.
-NO incluyas saludos ni comillas Markdown. Tu salida deber ser 100% parseable con JSON.parse().`
+REGLAS PARA INFERIR TEMPERATURAS:
+- Si menciona exhibidora, bebidas, gaseosas, cerveza, refrescos: temperatura_min=2, temperatura_max=8
+- Si menciona carnes frescas, pescado, mariscos, pollo fresco, carnicería: temperatura_min=0, temperatura_max=4
+- Si menciona lácteos, quesos, panadería, repostería: temperatura_min=2, temperatura_max=6
+- Si menciona helados, congelados, congela, freezer, congelador: temperatura_min=-25, temperatura_max=-18
+- Si menciona temperatura explícita (ej: congela a -20): usar ese valor exacto
+- Si no puedes inferir: dejar null
+REGLA PARA precio_minimo: Si el vendedor no lo menciona, calcula el 85% del precio redondeado al millar más cercano. Si precio es null, precio_minimo también es null.
+Si no se dice explícitamente algún campo, trata de inferirlo lógicamente del contexto. Si es imposible, pon null.
+NO incluyas saludos ni comillas Markdown. Tu salida debe ser 100% parseable con JSON.parse().`
 				},
 				{
 					role: 'user',
@@ -149,6 +160,101 @@ NO incluyas saludos ni comillas Markdown. Tu salida deber ser 100% parseable con
 	} catch (error) {
 		console.error('Error al estructurar descripción con IA:', error);
 		return null;
+	}
+}
+
+const CAMPOS_CRITICOS = ['precio', 'precio_minimo', 'temperatura_min', 'temperatura_max', 'tipo', 'nombre'];
+
+const MENSAJES_CAMPOS = {
+	precio: '¿Cuánto vale esta nevera? (precio de venta)',
+	precio_minimo: '¿Cuál es el mínimo al que la dejaría? (para negociación con cliente)',
+	temperatura_min: '¿A qué temperatura mínima llega? (ej: -20 para congelador, 2 para exhibidora)',
+	temperatura_max: '¿Cuál es la temperatura máxima de operación? (ej: -18 para congelador, 8 para exhibidora)',
+	tipo: '¿Qué tipo es? Responde: exhibidora, vertical, horizontal, congelador o vitrina',
+	nombre: '¿Cuál es la marca y modelo? (ej: Haceb exhibidora, Imbera G319)'
+};
+
+function checkCamposFaltantes(datos) {
+	return CAMPOS_CRITICOS.filter((campo) => datos[campo] === null || datos[campo] === undefined);
+}
+
+async function extraerValorCampoDeTexto(campo, respuesta) {
+	const instrucciones = {
+		precio: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE el precio como número entero en pesos colombianos sin puntos ni letras. Si dice tres millones devuelve 3000000. Responde SOLO con el número entero o null.`,
+		precio_minimo: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE el precio mínimo como número entero en pesos colombianos. Responde SOLO con el número entero o null.`,
+		temperatura_min: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE la temperatura mínima como número entero en grados Celsius (puede ser negativo, ej: -20). Responde SOLO con el número entero o null.`,
+		temperatura_max: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE la temperatura máxima como número entero en grados Celsius (puede ser negativo). Responde SOLO con el número entero o null.`,
+		tipo: `El vendedor respondió: "${respuesta}". Determina el tipo de nevera. Debe ser exactamente una de: exhibidora, vertical, horizontal, congelador, vitrina. Responde SOLO esa palabra o null.`,
+		nombre: `El vendedor respondió: "${respuesta}". Extrae la marca y modelo de la nevera (ej: "Haceb exhibidora", "Imbera G319"). Responde SOLO con el nombre corto o null.`
+	};
+	try {
+		const completion = await groq.chat.completions.create({
+			model: 'llama-3.3-70b-versatile',
+			temperature: 0,
+			max_tokens: 50,
+			messages: [
+				{ role: 'system', content: 'Eres un extractor de datos. Responde ÚNICAMENTE con el valor solicitado o la palabra null. Sin explicaciones ni texto adicional.' },
+				{ role: 'user', content: instrucciones[campo] }
+			]
+		});
+		const raw = (completion.choices[0]?.message?.content || '').trim();
+		if (raw.toLowerCase() === 'null' || raw === '') return null;
+		if (['precio', 'precio_minimo', 'temperatura_min', 'temperatura_max'].includes(campo)) {
+			const num = parseInt(raw.replace(/[^-\d]/g, ''), 10);
+			return Number.isNaN(num) ? null : num;
+		}
+		if (campo === 'tipo') {
+			const validos = ['exhibidora', 'vertical', 'horizontal', 'congelador', 'vitrina'];
+			const lower = raw.toLowerCase().trim();
+			return validos.includes(lower) ? lower : null;
+		}
+		return raw;
+	} catch (error) {
+		console.error(`Error al extraer valor del campo ${campo}:`, error);
+		return null;
+	}
+}
+
+async function mostrarResumenConfirmacion(chatId) {
+	const estado = estadosConversacion.get(chatId);
+	if (!estado) return;
+	const d = estado.datos;
+	const cantFotos = (d.fotosUrls || [d.fotoUrl]).filter(Boolean).length;
+	const resumen =
+		`*La IA estructuro la informacion asi:*\n\n` +
+		`*Nombre:* ${d.nombre || 'No detectado'}\n` +
+		`*Descripcion:* ${d.descripcion || 'No detectado'}\n` +
+		`*Especificaciones:* ${d.especificaciones || 'No detectado'}\n` +
+		`*Precio:* $${d.precio ? formatearPrecio(d.precio) : 'No detectado'} COP\n` +
+		`*Precio minimo:* $${d.precio_minimo ? formatearPrecio(d.precio_minimo) : 'No detectado'} COP\n` +
+		`*Tipo:* ${d.tipo || 'No detectado'}\n` +
+		`*Temperatura:* ${d.temperatura_min ?? 'N/D'}°C min / ${d.temperatura_max ?? 'N/D'}°C max\n` +
+		`*Ideal para:* ${d.usoRecomendado || 'No detectado'}\n` +
+		`*Capacidad:* ${d.capacidadLitros ? `${d.capacidadLitros}L` : 'No detectado'}\n` +
+		`*Fotos:* ${cantFotos} foto(s) guardada(s)\n\n` +
+		`Todo correcto?\n*SI* para guardar al inventario\n*NO* para cancelar\n_Envia otro audio/texto si se te olvido algo y lo actualizo._`;
+	await botInstance.sendMessage(chatId, resumen, { parse_mode: 'Markdown' });
+}
+
+async function procesarRespuestaCampo(chatId, respuesta, estado) {
+	const campo = estado.camposFaltantes[estado.campoActual];
+	const valor = await extraerValorCampoDeTexto(campo, respuesta);
+	if (valor === null) {
+		await botInstance.sendMessage(chatId, `No pude entender ese valor. Intenta de nuevo:\n\n❓ ${MENSAJES_CAMPOS[campo]}`);
+		return;
+	}
+	estado.datos[campo] = valor;
+	estado.campoActual++;
+	if (estado.campoActual < estado.camposFaltantes.length) {
+		const siguienteCampo = estado.camposFaltantes[estado.campoActual];
+		estadosConversacion.set(chatId, estado);
+		await botInstance.sendMessage(chatId, `✅ Guardado. Siguiente:\n\n❓ ${MENSAJES_CAMPOS[siguienteCampo]}`);
+	} else {
+		estado.paso = 'esperando_confirmacion';
+		delete estado.camposFaltantes;
+		delete estado.campoActual;
+		estadosConversacion.set(chatId, estado);
+		await mostrarResumenConfirmacion(chatId);
 	}
 }
 
@@ -190,25 +296,19 @@ async function iniciarBot(dbModule) {
 			usoRecomendado: datosIA.uso_recomendado,
 			capacidadLitros: datosIA.capacidad_litros
 		};
-		estado.paso = 'esperando_confirmacion';
-		estadosConversacion.set(chatId, estado);
 
-		const precioFormateado = datosIA.precio ? formatearPrecio(datosIA.precio) : 'No detectado';
-		const cantFotos = (estado.datos.fotosUrls || [estado.datos.fotoUrl]).filter(Boolean).length;
-
-		const resumen =
-			`*La IA estructuro la informacion asi:*\n\n` +
-			`*Nombre:* ${datosIA.nombre || 'No detectado'}\n` +
-			`*Descripcion:* ${datosIA.descripcion || 'No detectado'}\n` +
-			`*Especificaciones:* ${datosIA.especificaciones || 'No detectado'}\n` +
-			`*Precio:* $${precioFormateado} COP\n` +
-			`*Tipo:* ${datosIA.tipo || 'No detectado'}\n` +
-			`*Ideal para:* ${datosIA.uso_recomendado || 'No detectado'}\n` +
-			`*Capacidad:* ${datosIA.capacidad_litros ? `${datosIA.capacidad_litros}L` : 'No detectado'}\n` +
-			`*Fotos:* ${cantFotos} foto(s) guardada(s)\n\n` +
-			`Todo correcto?\n*SI* para guardar al inventario\n*NO* para cancelar\n_Envia otro audio/texto si se te olvido algo y lo actualizo._`;
-
-		await botInstance.sendMessage(chatId, resumen, { parse_mode: 'Markdown' });
+		const faltantes = checkCamposFaltantes(estado.datos);
+		if (faltantes.length > 0) {
+			estado.paso = 'completando_campos';
+			estado.camposFaltantes = faltantes;
+			estado.campoActual = 0;
+			estadosConversacion.set(chatId, estado);
+			await botInstance.sendMessage(chatId, `⚠️ Faltan ${faltantes.length} dato(s) obligatorio(s). Responde cada pregunta:\n\n❓ ${MENSAJES_CAMPOS[faltantes[0]]}`);
+		} else {
+			estado.paso = 'esperando_confirmacion';
+			estadosConversacion.set(chatId, estado);
+			await mostrarResumenConfirmacion(chatId);
+		}
 	}
 
 	async function guardarNeveraEnBD(chatId) {
@@ -224,9 +324,12 @@ async function iniciarBot(dbModule) {
 			descripcion: estado.datos.descripcion,
 			especificaciones: estado.datos.especificaciones,
 			precio: estado.datos.precio,
+			precio_minimo: estado.datos.precio_minimo,
 			tipo: estado.datos.tipo,
 			capacidad_litros: estado.datos.capacidadLitros,
 			uso_recomendado: estado.datos.usoRecomendado,
+			temperatura_min: estado.datos.temperatura_min,
+			temperatura_max: estado.datos.temperatura_max,
 			foto_url: fotoUrl
 		});
 
@@ -321,7 +424,22 @@ async function iniciarBot(dbModule) {
 		if (!esDueno(senderId)) return;
 
 		const estado = estadosConversacion.get(chatId);
-		if (!estado || (estado.paso !== 'esperando_descripcion' && estado.paso !== 'esperando_confirmacion')) return;
+		if (!estado || (
+			estado.paso !== 'esperando_descripcion' &&
+			estado.paso !== 'esperando_confirmacion' &&
+			estado.paso !== 'completando_campos'
+		)) return;
+
+		if (estado.paso === 'completando_campos') {
+			await botInstance.sendMessage(chatId, '🎤 Transcribiendo respuesta...');
+			const transcripcion = await transcribirAudio(botInstance, msg.voice.file_id);
+			if (!transcripcion) {
+				await botInstance.sendMessage(chatId, 'No pude transcribir. Intenta de nuevo o escribe el valor.');
+				return;
+			}
+			await procesarRespuestaCampo(chatId, transcripcion, estado);
+			return;
+		}
 
 		const esEdicion = estado.paso === 'esperando_confirmacion';
 		await botInstance.sendMessage(chatId, esEdicion ? 'Transcribiendo correccion...' : 'Transcribiendo audio...');
@@ -411,6 +529,11 @@ async function iniciarBot(dbModule) {
 		if (estado.paso === 'esperando_descripcion') {
 			await botInstance.sendMessage(senderChatId, '⏳ Procesando descripción con IA...');
 			await procesarDescripcionLibre(senderChatId, texto);
+			return;
+		}
+
+		if (estado.paso === 'completando_campos') {
+			await procesarRespuestaCampo(senderChatId, texto, estado);
 			return;
 		}
 

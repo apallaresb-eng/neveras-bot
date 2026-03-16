@@ -210,9 +210,12 @@ async function guardarNevera(datos) {
         descripcion: datos.descripcion,
         especificaciones: datos.especificaciones,
         precio: datos.precio,
+        precio_minimo: datos.precio_minimo,
         tipo: datos.tipo,
         capacidad_litros: datos.capacidad_litros,
         uso_recomendado: datos.uso_recomendado,
+        temperatura_min: datos.temperatura_min,
+        temperatura_max: datos.temperatura_max,
         foto_url: datos.foto_url
       })
       .select()
