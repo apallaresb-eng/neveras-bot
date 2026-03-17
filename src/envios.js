@@ -108,18 +108,28 @@ async function procesarSolicitudEnvio(conversacion, ciudad, telegramModule, dbMo
 					cotizacionExistente.id,
 					ciudad,
 					tipoMencionado,
-					conversacion.telefono
+					conversacion.telefono,
+					dbModule
 				);
 
 				return `📦 Perfecto, ya actualicé su ciudad destino a *${ciudad}*. Le confirmo el costo en máximo 1 hora. ⏱️ 😊`;
 			}
 
+			if (!ciudad) {
+				return '📦 Claro, hacemos envíos a toda Colombia.\n\n¿Me puede indicar a qué ciudad sería el envío?';
+			}
+
 			return '📦 Ya estamos consultando el costo de envío para usted. Le confirmo en máximo 1 hora. ⏱️ ¿Tiene alguna otra duda? 😊';
+		}
+
+		if (!ciudad) {
+			// No crear cotización hasta tener ciudad real
+			return '¿A qué ciudad sería el envío?';
 		}
 
 		const cotizacion = await dbModule.crearCotizacionEnvio(
 			conversacion.id,
-			ciudad || 'Ciudad por confirmar',
+			ciudad,
 			null
 		);
 
@@ -129,9 +139,10 @@ async function procesarSolicitudEnvio(conversacion, ciudad, telegramModule, dbMo
 
 		await telegramModule.notificarCotizacionEnvio(
 			cotizacion.id,
-			ciudad || 'Ciudad por confirmar (preguntar al cliente)',
+			ciudad,
 			tipoMencionado,
-			conversacion.telefono
+			conversacion.telefono,
+			dbModule
 		);
 
 		if (ciudad) {

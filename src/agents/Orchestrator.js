@@ -9,6 +9,36 @@ class Orchestrator extends BaseAgent {
     super('AgenteOrquestador', 'El router cognitivo. Recibe el mensaje, decide a quién invocar, arma el contexto final y lo pasa por el auditor.');
   }
 
+  ciudadEsValidaParaEnvio(ciudad) {
+    if (!ciudad) return false;
+    const normalizada = String(ciudad).trim().toLowerCase();
+    if (!normalizada) return false;
+    if (normalizada === 'desconocido' || normalizada === 'no mencionado') return false;
+    if (normalizada.includes('confirmar')) return false;
+    return true;
+  }
+
+  extraerEtiquetaFoto(respuesta, inventarioDisponible) {
+    const regexFoto = /\[ENVIAR_FOTO:([^\]]+)\]/;
+    const matchFoto = String(respuesta || '').match(regexFoto);
+
+    if (!matchFoto) {
+      return { respuestaLimpia: respuesta, fotoUrl: null };
+    }
+
+    const neveraId = String(matchFoto[1]).trim();
+    const respuestaSinEtiqueta = String(respuesta || '').replace(regexFoto, '').trim();
+    const inventario = Array.isArray(inventarioDisponible)
+      ? inventarioDisponible
+      : (inventarioDisponible?.data || []);
+    const neveraConFoto = inventario.find((n) => String(n.id) === neveraId);
+
+    return {
+      respuestaLimpia: respuestaSinEtiqueta,
+      fotoUrl: neveraConFoto?.foto_url || null
+    };
+  }
+
   async procesarMensaje(telefono, mensajeCliente, historial, inventarioDisponible, leadScore, dbInsights = '') {
     try {
       // 1. Detección rápida de Intención y Routing
@@ -26,10 +56,22 @@ class Orchestrator extends BaseAgent {
       // Extraer contexto del cliente para inyectar en el prompt de ventas (Mejora 3)
       const datosCliente = await this.extraerContextoRapido(historial, mensajeCliente);
       const strDatosCliente = `[CONTEXTO CLIENTE: Nombre: ${datosCliente.nombre_cliente || 'Desconocido'}, Negocio: ${datosCliente.tipo_negocio || 'Desconocido'}, Equipo buscado: ${datosCliente.equipo_interes || 'Desconocido'}, Ciudad: ${datosCliente.ciudad || 'Desconocido'}]`;
+      const ciudadEnvioValida = this.ciudadEsValidaParaEnvio(datosCliente.ciudad);
+      const controlEnvio = (intencion === 'pide_envio')
+        ? {
+            debeGenerarCotizacion: ciudadEnvioValida,
+            ciudad: ciudadEnvioValida ? String(datosCliente.ciudad).trim() : null
+          }
+        : { debeGenerarCotizacion: false, ciudad: null };
+      const contextoEnvio = (intencion === 'pide_envio' && !ciudadEnvioValida)
+        ? '[CONTROL_ENVIO: No generar cotización aún. Primero preguntar y confirmar ciudad destino.]'
+        : (intencion === 'pide_envio' && ciudadEnvioValida)
+          ? `[CONTROL_ENVIO: Ciudad confirmada para cotización: ${controlEnvio.ciudad}]`
+          : '';
 
       // 3. Generación de Respuesta por el SalesAgent (El Cerrador)
       // Agregamos los insights históricos + el contexto actual en tiempo real
-      const contextoTotal = `[INSIGHTS APRENDIDOS DEL PASADO: ${dbInsights}]\n${contextoInvestigador}\n${strDatosCliente}`;
+      const contextoTotal = `[INSIGHTS APRENDIDOS DEL PASADO: ${dbInsights}]\n${contextoInvestigador}\n${strDatosCliente}\n${contextoEnvio}`;
       const respuestaPropuesta = await SalesAgent.responderVenta(
         mensajeCliente, 
         historial, 
@@ -39,7 +81,11 @@ class Orchestrator extends BaseAgent {
       );
 
       if (!respuestaPropuesta) {
-        return { respuesta: 'Tuvimos un error procesando tu solicitud. ¿Me la repites?', intencionDetectada: intencion };
+        return {
+          respuesta: 'Tuvimos un error procesando tu solicitud. ¿Me la repites?',
+          intencionDetectada: intencion,
+          cotizacionEnvio: controlEnvio
+        };
       }
 
       // 4. Auditoría Verificadora
@@ -60,16 +106,30 @@ class Orchestrator extends BaseAgent {
             auditoria.sugerencia_correccion
           );
           if (mensajeCorregido) {
-            return { respuesta: mensajeCorregido, intencionDetectada: intencion, auditado: true };
+            const resultadoFoto = this.extraerEtiquetaFoto(mensajeCorregido, inventarioDisponible);
+            return {
+              respuesta: resultadoFoto.respuestaLimpia,
+              intencionDetectada: intencion,
+              auditado: true,
+              fotoUrl: resultadoFoto.fotoUrl,
+              cotizacionEnvio: controlEnvio
+            };
           }
         }
-        return { respuesta: 'Disculpe, verificando el inventario actual me di cuenta de un error en lo que iba a decirle. ¿Me permite revisar y le cuento qué tenemos en bodega?', intencionDetectada: intencion };
+        return {
+          respuesta: 'Disculpe, verificando el inventario actual me di cuenta de un error en lo que iba a decirle. ¿Me permite revisar y le cuento qué tenemos en bodega?',
+          intencionDetectada: intencion,
+          cotizacionEnvio: controlEnvio
+        };
       }
 
       // 5. Todo OK
+      const resultadoFoto = this.extraerEtiquetaFoto(respuestaPropuesta, inventarioDisponible);
       return {
-        respuesta: respuestaPropuesta,
-        intencionDetectada: intencion
+        respuesta: resultadoFoto.respuestaLimpia,
+        intencionDetectada: intencion,
+        fotoUrl: resultadoFoto.fotoUrl,
+        cotizacionEnvio: controlEnvio
       };
 
     } catch (e) {
@@ -120,7 +180,7 @@ class Orchestrator extends BaseAgent {
   async extraerContextoRapido(historial, mensajeCliente) {
     try {
       const msj = [
-        { role: 'system', content: `Eres un extractor de contexto de ventas JSON. Analiza la conversación y extrae estos campos si estuvieron explícitamente mencionados, de lo contrario devuelve "Desconocido". Responde ÚNICAMENTE con JSON válido sin formato markdown de bloques de código: { "nombre_cliente": "", "tipo_negocio": "", "equipo_interes": "", "ciudad": "" }` },
+        { role: 'system', content: `Eres un extractor de contexto de ventas JSON. Analiza la conversación y extrae estos campos si estuvieron explícitamente mencionados, de lo contrario devuelve "Desconocido". Para ciudad: extrae SOLO el nombre de la ciudad, sin departamento ni país. Ejemplos: "Buenaventura", "Cali", "Bogotá", "Medellín". Si dicen "Buenaventura, Chocó" devuelve "Buenaventura". Si dicen "Bogotá, Colombia" devuelve "Bogotá". Si dicen "Medellín Antioquia" devuelve "Medellín". Responde ÚNICAMENTE con JSON válido sin formato markdown de bloques de código: { "nombre_cliente": "", "tipo_negocio": "", "equipo_interes": "", "ciudad": "" }` },
         ...this.formatearHistorial(historial, 6),
         { role: 'user', content: mensajeCliente }
       ];

@@ -485,7 +485,7 @@ app.post('/webhook', async (req, res) => {
 		const contextoInventario = await obtenerContextoInventario();
 		console.log('Inventario para IA:', contextoInventario);
 
-		const { respuesta, intencionDetectada } = await ai.procesarMensaje(
+		const { respuesta, intencionDetectada, fotoUrl } = await ai.procesarMensaje(
 			datos.telefono,
 			datos.mensaje,
 			historial,
@@ -550,7 +550,11 @@ app.post('/webhook', async (req, res) => {
 			return;
 		}
 
-		await enviarMensajesDivididos(datos.telefono, respuesta);
+		if (fotoUrl) {
+			await whatsapp.enviarMensajeConImagen(datos.telefono, respuesta, fotoUrl);
+		} else {
+			await enviarMensajesDivididos(datos.telefono, respuesta);
+		}
 
 		// ═══ LÓGICA INTELIGENTE DE FOTOS ═══
 		const debeEnviarFoto = async (mensajeCliente, respuestaBot, telefono) => {
@@ -661,7 +665,9 @@ app.post('/webhook', async (req, res) => {
 		};
 
 		// Llamar la función con los datos del mensaje actual
-		await debeEnviarFoto(datos.mensaje, respuesta, datos.telefono);
+		if (!fotoUrl) {
+			await debeEnviarFoto(datos.mensaje, respuesta, datos.telefono);
+		}
 	} catch (error) {
 		console.error('[Webhook Error]', error);
 	}

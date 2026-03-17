@@ -1033,22 +1033,35 @@ async function reenviarMensajeAVendedor(telefonoCliente, mensajeCliente, nombreC
 	}
 }
 
-async function notificarCotizacionEnvio(cotizacionId, ciudad, nombreNevera, telefonoCliente) {
+async function notificarCotizacionEnvio(cotizacionId, ciudad, nombreNevera, telefonoCliente, dbModule) {
 	try {
 		if (!botInstance) return;
 
-		const chatId = process.env.TELEGRAM_OWNER_CHAT_ID;
 		const mensaje =
 			'🚚 *COTIZACIÓN DE ENVÍO REQUERIDA*\n\n' +
-			`👤 Cliente: +${telefonoCliente}\n` +
-			`📦 Nevera: ${nombreNevera}\n` +
-			`📍 Ciudad: ${ciudad}\n` +
-			`🔑 ID: ${cotizacionId}\n\n` +
-			'✏️ Responde con:\n' +
+			`👤 *Cliente:* +${telefonoCliente}\n` +
+			`📦 *Nevera:* ${nombreNevera}\n` +
+			`📍 *Ciudad destino:* ${ciudad}\n` +
+			`🔑 *ID:* ${cotizacionId}\n\n` +
+			'Responde con:\n' +
 			`/envio ${cotizacionId} [precio]\n` +
 			`Ejemplo: /envio ${cotizacionId} 95000`;
 
-		await botInstance.sendMessage(chatId, mensaje, { parse_mode: 'Markdown' });
+		let threadId = temporaryThreadMap.get(telefonoCliente) || null;
+		if (!threadId && dbModule) {
+			const conversacion = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
+			threadId = conversacion?.telegram_thread_id || null;
+		}
+
+		if (threadId && SUPER_GROUP_ID) {
+			await botInstance.sendMessage(SUPER_GROUP_ID, mensaje, {
+				parse_mode: 'Markdown',
+				message_thread_id: threadId
+			});
+		}
+
+		const chatIdDueno = process.env.TELEGRAM_OWNER_CHAT_ID;
+		await botInstance.sendMessage(chatIdDueno, mensaje, { parse_mode: 'Markdown' });
 	} catch (error) {
 		console.error('Error al notificar cotización de envío:', error);
 	}
