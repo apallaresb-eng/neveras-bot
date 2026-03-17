@@ -19,11 +19,56 @@ const supabase = createClient(
 	process.env.SUPABASE_KEY
 );
 
-const obtenerContextoInventario = async () => {
+function inferirUsos(temperaturaMin, temperaturaMax, usoRecomendado) {
+	if (temperaturaMin == null || temperaturaMax == null) {
+		return usoRecomendado || 'Uso recomendado no especificado';
+	}
+
+	if (temperaturaMax <= -18) {
+		return 'Helados, carnes congeladas, pollos congelados';
+	}
+
+	if (temperaturaMax <= 4) {
+		return 'Carnes frescas, pescado fresco, mariscos, pollo';
+	}
+
+	if (temperaturaMax <= 6) {
+		return 'Lácteos, quesos, panadería, repostería';
+	}
+
+	if (temperaturaMax <= 8) {
+		return 'Bebidas (cerveza, gaseosa, agua), lácteos, flores';
+	}
+
+	return usoRecomendado || 'Uso recomendado no especificado';
+}
+
+function inferirCapacidadNecesaria(mensaje) {
+	const msg = String(mensaje || '').toLowerCase();
+	const matchCanastas = msg.match(/(\d+)\s*(canastas?|cajillas?|cajas?)\s*(de\s*)?(cerveza|gaseosa|refresco)?/);
+	if (matchCanastas) {
+		const cantidad = parseInt(matchCanastas[1], 10);
+		return cantidad * 20;
+	}
+
+	const matchLitros = msg.match(/(\d+)\s*litros?/);
+	if (matchLitros) {
+		return parseInt(matchLitros[1], 10);
+	}
+
+	const matchKilos = msg.match(/(\d+)\s*(kilos?|kg)/);
+	if (matchKilos) {
+		return parseInt(matchKilos[1], 10);
+	}
+
+	return null;
+}
+
+const obtenerContextoInventario = async (capacidadNecesaria = null) => {
 	try {
 		const { data: neveras, error } = await supabase
 			.from('neveras')
-			.select('nombre, tipo, capacidad_litros, precio, uso_recomendado, descripcion')
+			.select('id, nombre, tipo, capacidad_litros, precio, precio_minimo, temperatura_min, temperatura_max, uso_recomendado, descripcion, foto_url')
 			.eq('disponible', true);
 
 		console.log('Query inventario resultado:', {
@@ -36,18 +81,29 @@ const obtenerContextoInventario = async () => {
 			return 'INVENTARIO ACTUAL: No hay neveras disponibles en este momento.';
 		}
 
-		const lista = neveras.map((n, i) => {
+		const lista = neveras.map((n) => {
 			const temp = (n.temperatura_min != null && n.temperatura_max != null)
-				? `${n.temperatura_min}°C a ${n.temperatura_max}°C` : '';
+				? `${n.temperatura_min}°C a ${n.temperatura_max}°C`
+				: 'No especificada';
 			const precio = n.precio
 				? `$${Number(n.precio).toLocaleString('es-CO')} COP` : 'consultar';
 			const capacidad = n.capacidad_litros
-				? `${n.capacidad_litros} litros` : '';
+				? `${n.capacidad_litros} litros`
+				: 'capacidad no especificada';
+			const usoInferido = inferirUsos(n.temperatura_min, n.temperatura_max, n.uso_recomendado);
+			const precioMinimo = n.precio_minimo
+				? Number(n.precio_minimo).toLocaleString('es-CO')
+				: 'consultar';
 
-			return `- ${n.nombre} | Tipo: ${n.tipo || 'N/A'} | ${capacidad} | Temperatura: ${temp} | Precio: ${precio} | Uso ideal: ${n.uso_recomendado || n.descripcion || 'N/A'}`;
+			return `[ID:${n.id}] ${n.nombre} | Tipo: ${n.tipo || 'N/A'} | ${capacidad} | Temperatura: ${temp} | Apto para: ${usoInferido} | Precio: ${precio} | Precio mínimo negociable (SOLO para Don Carlos, nunca decirlo al cliente): $${precioMinimo} COP`;
 		}).join('\n');
 
-		return `INVENTARIO ACTUAL DISPONIBLE (solo esto existe, no inventes más):\n${lista}`;
+		const contextoBase = `INVENTARIO ACTUAL DISPONIBLE (solo esto existe, no inventes más):\n${lista}`;
+		if (capacidadNecesaria) {
+			return `${contextoBase}\n\nIMPORTANTE: El cliente necesita aproximadamente ${capacidadNecesaria} litros.\nSolo recomendar neveras con capacidad_litros >= ${capacidadNecesaria}.\nSi ninguna tiene suficiente capacidad, decirlo honestamente.`;
+		}
+
+		return contextoBase;
 
 	} catch (err) {
 		console.error('Error obteniendo inventario para IA:', err);
@@ -482,7 +538,8 @@ app.post('/webhook', async (req, res) => {
 			return;
 		}
 
-		const contextoInventario = await obtenerContextoInventario();
+		const capacidadNecesaria = inferirCapacidadNecesaria(datos.mensaje);
+		const contextoInventario = await obtenerContextoInventario(capacidadNecesaria);
 		console.log('Inventario para IA:', contextoInventario);
 
 		const { respuesta, intencionDetectada, fotoUrl } = await ai.procesarMensaje(
@@ -554,119 +611,6 @@ app.post('/webhook', async (req, res) => {
 			await whatsapp.enviarMensajeConImagen(datos.telefono, respuesta, fotoUrl);
 		} else {
 			await enviarMensajesDivididos(datos.telefono, respuesta);
-		}
-
-		// ═══ LÓGICA INTELIGENTE DE FOTOS ═══
-		const debeEnviarFoto = async (mensajeCliente, respuestaBot, telefono) => {
-			try {
-				console.log('[Foto] Evaluando envío de foto para:', telefono);
-
-				// REGLA 1: Nunca enviar foto si el bot dice que no hay stock
-				const frasesNoStock = [
-					'no tenemos', 'no hay', 'sin stock', 'no contamos',
-					'no disponible', 'agotado', 'no tengo'
-				];
-				const botDiceNoHayStock = frasesNoStock.some(f =>
-					respuestaBot.toLowerCase().includes(f)
-				);
-				console.log('[Foto] Bot dice no hay stock:', botDiceNoHayStock);
-				if (botDiceNoHayStock) return;
-
-				// REGLA 2: Solo enviar foto cuando el bot recomienda algo concreto
-				const frasesRecomienda = [
-					'tenemos', 'disponible', 'contamos con', 'tengo',
-					'le puedo ofrecer', 'perfecta para', 'ideal para'
-				];
-				const botRecomienda = frasesRecomienda.some(f =>
-					respuestaBot.toLowerCase().includes(f)
-				);
-				console.log('[Foto] Bot recomienda algo:', botRecomienda);
-				if (!botRecomienda) return;
-
-				// REGLA 3: Buscar la nevera mas relevante para este cliente
-				const { data: neveras } = await supabase
-					.from('neveras')
-					.select('id, nombre, tipo, uso_recomendado, descripcion, foto_url')
-					.eq('disponible', true)
-					.not('foto_url', 'is', null);
-
-				console.log('[Foto] Neveras con foto disponibles:', neveras?.length || 0);
-
-				if (!neveras || neveras.length === 0) return;
-
-				const msgL = mensajeCliente.toLowerCase();
-				const respL = respuestaBot.toLowerCase();
-
-				let neveraElegida = null;
-
-				// 1. Intentar buscar por el ID específico mencionado por Don Carlos en su respuesta
-				const matchId = respuestaBot.match(/\[ID:([^\]]+)\]/i);
-				if (matchId) {
-					const idMencionado = String(matchId[1]).trim();
-					neveraElegida = neveras.find((n) => String(n.id) === idMencionado);
-				}
-
-				// 2. Fallback: Buscar por tipo de negocio o coincidencia de nombre
-				if (!neveraElegida) {
-					// Mapa de palabras clave por tipo de negocio
-					const mapaNegocios = {
-						'horizontal': ['carnicería', 'carniceria', 'horizontal', 'carne', 'res', 'cerdo'],
-						'vertical': ['restaurante', 'cocina', 'vertical', 'farmacia', 'droguería', 'drogueria'],
-						'exhibidora': ['panadería', 'panaderia', 'pastelería', 'pasteleria', 'exhibidora', 'tienda', 'minimercado'],
-						'congelador': ['heladería', 'heladeria', 'congelador', 'helados', 'congelado']
-					};
-
-					// Determinar qué tipo busca el cliente
-					let tipoRequerido = null;
-					for (const [tipo, palabras] of Object.entries(mapaNegocios)) {
-						if (palabras.some(p => msgL.includes(p) || respL.includes(p))) {
-							tipoRequerido = tipo;
-							break;
-						}
-					}
-
-					// Buscar nevera que coincida con el tipo requerido
-					if (tipoRequerido) {
-						neveraElegida = neveras.find(n => {
-							const tipoN = (n.tipo || '').toLowerCase();
-							const usoN = (n.uso_recomendado || '').toLowerCase();
-							const nomN = (n.nombre || '').toLowerCase();
-							return tipoN.includes(tipoRequerido) ||
-								usoN.includes(tipoRequerido) ||
-								nomN.includes(tipoRequerido);
-						});
-					}
-
-					// Si no encontró por tipo, buscar por nombre en la respuesta
-					if (!neveraElegida) {
-						neveraElegida = neveras.find(n =>
-							respL.includes((n.nombre || '').toLowerCase())
-						);
-					}
-				}
-
-				// Solo enviar si encontró coincidencia real
-				console.log('[Foto] Nevera elegida para enviar:', neveraElegida?.nombre || 'ninguna');
-				if (neveraElegida) {
-					// 3. Esperar 1.5 segundos antes de enviar la foto (más natural)
-					await new Promise(r => setTimeout(r, 1500));
-					console.log('[Foto] Intentando enviar foto URL:', neveraElegida.foto_url);
-					await whatsapp.enviarMensajeConImagen(
-						telefono,
-						`📸 *${neveraElegida.nombre}*\n_Esta es la que tenemos disponible_`,
-						neveraElegida.foto_url
-					);
-					console.log('[Foto] ✅ Foto enviada correctamente');
-				}
-
-			} catch(e) {
-				console.error('[Foto] ❌ Error enviando foto:', e.message);
-			}
-		};
-
-		// Llamar la función con los datos del mensaje actual
-		if (!fotoUrl) {
-			await debeEnviarFoto(datos.mensaje, respuesta, datos.telefono);
 		}
 	} catch (error) {
 		console.error('[Webhook Error]', error);
