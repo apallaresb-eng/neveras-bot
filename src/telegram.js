@@ -166,16 +166,20 @@ NO incluyas saludos ni comillas Markdown. Tu salida debe ser 100% parseable con 
 const CAMPOS_CRITICOS = ['precio', 'precio_minimo', 'temperatura_min', 'temperatura_max', 'tipo', 'nombre'];
 
 const MENSAJES_CAMPOS = {
-	precio: '¿Cuánto vale esta nevera? (precio de venta)',
-	precio_minimo: '¿Cuál es el mínimo al que la dejaría? (para negociación con cliente)',
-	temperatura_min: '¿A qué temperatura mínima llega? (ej: -20 para congelador, 2 para exhibidora)',
-	temperatura_max: '¿Cuál es la temperatura máxima de operación? (ej: -18 para congelador, 8 para exhibidora)',
+	precio: '¿Cuánto vale esta nevera? (precio de venta en pesos)',
+	precio_minimo: '¿Cuál es el mínimo al que la dejaría? (para negociar con el cliente)',
+	temperatura_min: '¿A qué temperatura mínima llega? Ejemplo: -20 para congelador, 2 para exhibidora',
+	temperatura_max: '¿Cuál es la temperatura máxima? Ejemplo: -18 para congelador, 8 para exhibidora',
 	tipo: '¿Qué tipo es? Responde: exhibidora, vertical, horizontal, congelador o vitrina',
-	nombre: '¿Cuál es la marca y modelo? (ej: Haceb exhibidora, Imbera G319)'
+	nombre: '¿Cuál es la marca y modelo? Ejemplo: Haceb exhibidora, Imbera G319'
 };
 
 function checkCamposFaltantes(datos) {
 	return CAMPOS_CRITICOS.filter((campo) => datos[campo] === null || datos[campo] === undefined);
+}
+
+async function preguntarCampoFaltante(chatId, campo) {
+	await botInstance.sendMessage(chatId, `❓ ${MENSAJES_CAMPOS[campo]}`);
 }
 
 async function extraerValorCampoDeTexto(campo, respuesta) {
@@ -240,7 +244,8 @@ async function procesarRespuestaCampo(chatId, respuesta, estado) {
 	const campo = estado.camposFaltantes[estado.campoActual];
 	const valor = await extraerValorCampoDeTexto(campo, respuesta);
 	if (valor === null) {
-		await botInstance.sendMessage(chatId, `No pude entender ese valor. Intenta de nuevo:\n\n❓ ${MENSAJES_CAMPOS[campo]}`);
+		await botInstance.sendMessage(chatId, 'No pude entender ese valor. Intenta de nuevo:');
+		await preguntarCampoFaltante(chatId, campo);
 		return;
 	}
 	estado.datos[campo] = valor;
@@ -248,7 +253,8 @@ async function procesarRespuestaCampo(chatId, respuesta, estado) {
 	if (estado.campoActual < estado.camposFaltantes.length) {
 		const siguienteCampo = estado.camposFaltantes[estado.campoActual];
 		estadosConversacion.set(chatId, estado);
-		await botInstance.sendMessage(chatId, `✅ Guardado. Siguiente:\n\n❓ ${MENSAJES_CAMPOS[siguienteCampo]}`);
+		await botInstance.sendMessage(chatId, '✅ Guardado. Siguiente:');
+		await preguntarCampoFaltante(chatId, siguienteCampo);
 	} else {
 		estado.paso = 'esperando_confirmacion';
 		delete estado.camposFaltantes;
@@ -303,7 +309,8 @@ async function iniciarBot(dbModule) {
 			estado.camposFaltantes = faltantes;
 			estado.campoActual = 0;
 			estadosConversacion.set(chatId, estado);
-			await botInstance.sendMessage(chatId, `⚠️ Faltan ${faltantes.length} dato(s) obligatorio(s). Responde cada pregunta:\n\n❓ ${MENSAJES_CAMPOS[faltantes[0]]}`);
+			await botInstance.sendMessage(chatId, `⚠️ Faltan ${faltantes.length} dato(s) obligatorio(s). Responde una por una:`);
+			await preguntarCampoFaltante(chatId, faltantes[0]);
 		} else {
 			estado.paso = 'esperando_confirmacion';
 			estadosConversacion.set(chatId, estado);
@@ -538,14 +545,30 @@ async function iniciarBot(dbModule) {
 		}
 
 		if (estado.paso === 'esperando_confirmacion') {
-			const respuesta = texto.toLowerCase();
+			// Mensajes de más de 4 palabras son correcciones, nunca cancelaciones
+			const palabras = texto.trim().split(/\s+/);
+			if (palabras.length > 4) {
+				await botInstance.sendMessage(senderChatId, '⏳ Procesando corrección con IA...');
+				const textoAnterior = [
+					estado.datos.nombre,
+					estado.datos.descripcion,
+					estado.datos.especificaciones,
+					estado.datos.precio ? `precio: ${estado.datos.precio}` : '',
+					estado.datos.tipo ? `tipo: ${estado.datos.tipo}` : ''
+				].filter(Boolean).join('. ');
+				await procesarDescripcionLibre(senderChatId, texto, textoAnterior);
+				return;
+			}
+
+			const respuesta = texto.toLowerCase().trim();
 
 			if (respuesta.includes('si') || respuesta.includes('sí')) {
 				await guardarNeveraEnBD(senderChatId);
 				return;
 			}
 
-			if (respuesta.includes('no')) {
+			// Solo cancela si el mensaje es exactamente "no", "No", "NO"
+			if (respuesta === 'no') {
 				await eliminarFotoDeSupabase(estado.datos.nombreArchivo);
 				estadosConversacion.delete(senderChatId);
 				await botInstance.sendMessage(
