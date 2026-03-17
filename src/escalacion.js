@@ -78,7 +78,7 @@ async function escalarAVendedor(conversacion, telegramModule, dbModule) {
 			neveraDeInteres: resumen.neveraDeInteres,
 			leadScore: conversacion.lead_score,
 			resumenTexto: resumen.resumenTexto
-		});
+		}, dbModule);
 
 		return true;
 	} catch (error) {

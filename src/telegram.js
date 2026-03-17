@@ -1037,37 +1037,76 @@ async function notificarCotizacionEnvio(cotizacionId, ciudad, nombreNevera, tele
 	try {
 		if (!botInstance) return;
 
+		// 1. Buscar threadId del cliente
+		let threadId = temporaryThreadMap.get(telefonoCliente);
+
+		if (!threadId && dbModule) {
+			const conv = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
+			if (conv) threadId = conv.telegram_thread_id;
+		}
+
+		const idCorto = String(cotizacionId).substring(0, 8);
+
 		const mensaje =
 			'🚚 *COTIZACIÓN DE ENVÍO REQUERIDA*\n\n' +
-			`👤 *Cliente:* +${telefonoCliente}\n` +
-			`📦 *Nevera:* ${nombreNevera}\n` +
-			`📍 *Ciudad destino:* ${ciudad}\n` +
-			`🔑 *ID:* ${cotizacionId}\n\n` +
-			'Responde con:\n' +
-			`/envio ${cotizacionId} [precio]\n` +
-			`Ejemplo: /envio ${cotizacionId} 95000`;
+			`👤 Cliente: +${telefonoCliente}\n` +
+			`📦 Nevera: ${nombreNevera}\n` +
+			`📍 Ciudad destino: ${ciudad}\n` +
+			`🔑 ID: ${idCorto}\n\n` +
+			'✏️ Responde con:\n' +
+			`/envio ${idCorto} [precio]\n` +
+			`Ejemplo: /envio ${idCorto} 95000`;
 
-		let threadId = temporaryThreadMap.get(telefonoCliente) || null;
-		if (!threadId && dbModule) {
-			const conversacion = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
-			threadId = conversacion?.telegram_thread_id || null;
+		// 2. Enviar al supergrupo en el hilo del cliente si existe
+		if (threadId && SUPER_GROUP_ID) {
+			try {
+				await botInstance.sendMessage(SUPER_GROUP_ID, mensaje, {
+					parse_mode: 'Markdown',
+					message_thread_id: threadId
+				});
+			} catch (threadError) {
+				console.error('[Telegram] Error enviando al hilo:', threadError.message);
+			}
 		}
 
-		if (threadId && SUPER_GROUP_ID) {
-			await botInstance.sendMessage(SUPER_GROUP_ID, mensaje, {
-				parse_mode: 'Markdown',
-				message_thread_id: threadId
+		// 3. Si no hay hilo, crear uno para este cliente
+		if (!threadId && SUPER_GROUP_ID && dbModule) {
+			try {
+				const conv = await dbModule.obtenerConversacionPorTelefono(telefonoCliente);
+				const nombre = conv?.nombre_cliente || telefonoCliente;
+				const topic = await botInstance.createForumTopic(
+					SUPER_GROUP_ID,
+					`📞 ${nombre}`
+				);
+				threadId = topic.message_thread_id;
+				temporaryThreadMap.set(telefonoCliente, threadId);
+
+				if (conv) {
+					await dbModule.vincularThreadAConversacion(conv.id, threadId);
+				}
+
+				await botInstance.sendMessage(SUPER_GROUP_ID, mensaje, {
+					parse_mode: 'Markdown',
+					message_thread_id: threadId
+				});
+			} catch (topicError) {
+				console.error('[Telegram] Error creando topic:', topicError.message);
+			}
+		}
+
+		// 4. Siempre enviar también al dueño en privado como respaldo
+		const chatIdDueno = process.env.TELEGRAM_OWNER_CHAT_ID;
+		if (chatIdDueno) {
+			await botInstance.sendMessage(chatIdDueno, mensaje, {
+				parse_mode: 'Markdown'
 			});
 		}
-
-		const chatIdDueno = process.env.TELEGRAM_OWNER_CHAT_ID;
-		await botInstance.sendMessage(chatIdDueno, mensaje, { parse_mode: 'Markdown' });
 	} catch (error) {
 		console.error('Error al notificar cotización de envío:', error);
 	}
 }
 
-async function notificarLeadCaliente(datosLead) {
+async function notificarLeadCaliente(datosLead, dbModule = null) {
 	try {
 		if (!botInstance) return;
 
@@ -1095,6 +1134,46 @@ async function notificarLeadCaliente(datosLead) {
 				await botInstance.sendMessage(chatId, mensaje, { parse_mode: 'Markdown' });
 			} catch (errorEnvio) {
 				console.error(`Error enviando lead caliente a ${chatId}:`, errorEnvio.message);
+			}
+		}
+
+		// Crear hilo en supergrupo si no existe
+		if (SUPER_GROUP_ID && datosLead.telefono) {
+			let threadId = temporaryThreadMap.get(datosLead.telefono);
+
+			if (!threadId) {
+				try {
+					const topicName = `📞 Lead: ${datosLead.nombre || datosLead.telefono}`;
+					const topic = await botInstance.createForumTopic(SUPER_GROUP_ID, topicName);
+					threadId = topic.message_thread_id;
+					temporaryThreadMap.set(datosLead.telefono, threadId);
+
+					if (dbModule) {
+						const conv = await dbModule.obtenerConversacionPorTelefono(datosLead.telefono);
+						if (conv) {
+							await dbModule.vincularThreadAConversacion(conv.id, threadId);
+						}
+					}
+				} catch (e) {
+					console.error('[Telegram] Error creando topic para lead:', e.message);
+				}
+			}
+
+			if (threadId) {
+				const resumenHilo =
+					'🔥 *LEAD ESCALADO*\n\n' +
+					`👤 *Cliente:* ${datosLead.nombre}\n` +
+					`📱 *Teléfono:* +${datosLead.telefono}\n` +
+					`🏪 *Negocio:* ${datosLead.tipoNegocio}\n` +
+					`❄️ *Interesado en:* ${datosLead.neveraDeInteres}\n` +
+					`📊 *Score:* ${datosLead.leadScore}/100\n\n` +
+					`💬 *Resumen:* ${datosLead.resumenTexto}\n\n` +
+					'Escribe aquí para responderle al cliente directamente.';
+
+				await botInstance.sendMessage(SUPER_GROUP_ID, resumenHilo, {
+					parse_mode: 'Markdown',
+					message_thread_id: threadId
+				});
 			}
 		}
 	} catch (error) {
