@@ -24,7 +24,7 @@ class BaseAgent {
     }
   }
 
-  formatearHistorial(historialMensajes, limite = 15) {
+  formatearHistorial(historialMensajes, limite = 6) {
     return (historialMensajes || [])
       .slice(-limite)
       .map(m => ({

@@ -9,6 +9,44 @@ class Orchestrator extends BaseAgent {
     super('AgenteOrquestador', 'El router cognitivo. Recibe el mensaje, decide a quién invocar, arma el contexto final y lo pasa por el auditor.');
   }
 
+  filtrarInventarioRelevante(mensajeCliente, inventarioDisponible) {
+    const items = Array.isArray(inventarioDisponible)
+      ? inventarioDisponible
+      : (inventarioDisponible?.data || []);
+
+    if (items.length <= 3) return items;
+
+    const msg = String(mensajeCliente || '').toLowerCase();
+    let candidatos = items;
+
+    const tipos = ['exhibidora', 'congelador', 'horizontal', 'vertical'];
+    const tipoDetectado = tipos.find((t) => msg.includes(t));
+    if (tipoDetectado) {
+      const porTipo = candidatos.filter((n) => String(n.tipo || '').toLowerCase().includes(tipoDetectado));
+      if (porTipo.length > 0) candidatos = porTipo;
+    }
+
+    const tieneBebidas = /cerveza|gaseosa|bebidas?|agua|refresco/.test(msg);
+    const tieneCarnes = /carne|carnes|pescado|mariscos/.test(msg);
+    const tieneHelados = /helados?|congelados?|freezer/.test(msg);
+    const tieneLacteos = /lácteos|lacteos|quesos?|panader[ií]a|reposter[ií]a/.test(msg);
+
+    let porUso = [];
+    if (tieneBebidas) {
+      porUso = candidatos.filter((n) => n.temperatura_max != null && n.temperatura_max >= 6 && n.temperatura_max <= 10);
+    } else if (tieneCarnes) {
+      porUso = candidatos.filter((n) => n.temperatura_max != null && n.temperatura_max >= 3 && n.temperatura_max <= 6);
+    } else if (tieneHelados) {
+      porUso = candidatos.filter((n) => n.temperatura_max != null && n.temperatura_max <= -15);
+    } else if (tieneLacteos) {
+      porUso = candidatos.filter((n) => n.temperatura_max != null && n.temperatura_max >= 4 && n.temperatura_max <= 8);
+    }
+
+    if (porUso.length > 0) candidatos = porUso;
+
+    return candidatos.slice(0, 3);
+  }
+
   ciudadEsValidaParaEnvio(ciudad) {
     if (!ciudad) return false;
     const normalizada = String(ciudad).trim().toLowerCase();
@@ -72,10 +110,11 @@ class Orchestrator extends BaseAgent {
       // 3. Generación de Respuesta por el SalesAgent (El Cerrador)
       // Agregamos los insights históricos + el contexto actual en tiempo real
       const contextoTotal = `[INSIGHTS APRENDIDOS DEL PASADO: ${dbInsights}]\n${contextoInvestigador}\n${strDatosCliente}\n${contextoEnvio}`;
+      const inventarioRelevante = this.filtrarInventarioRelevante(mensajeCliente, inventarioDisponible);
       const respuestaPropuesta = await SalesAgent.responderVenta(
         mensajeCliente, 
         historial, 
-        inventarioDisponible, 
+        inventarioRelevante, 
         contextoTotal, 
         leadScore
       );
@@ -89,7 +128,7 @@ class Orchestrator extends BaseAgent {
       }
 
       // 4. Auditoría Verificadora
-      const auditoria = await VerifierAgent.auditarRespuesta(respuestaPropuesta, inventarioDisponible);
+      const auditoria = await VerifierAgent.auditarRespuesta(respuestaPropuesta, inventarioRelevante);
 
       if (auditoria.estado === 'RECHAZADO') {
         console.warn('⚠️ [VerifierAgent] Interceptó una respuesta:', auditoria.motivo);
@@ -100,13 +139,13 @@ class Orchestrator extends BaseAgent {
           const mensajeCorregido = await SalesAgent.responderVenta(
             mensajeCliente,
             historial,
-            inventarioDisponible,
+            inventarioRelevante,
             contextoTotal,
             leadScore,
             auditoria.sugerencia_correccion
           );
           if (mensajeCorregido) {
-            const resultadoFoto = this.extraerEtiquetaFoto(mensajeCorregido, inventarioDisponible);
+            const resultadoFoto = this.extraerEtiquetaFoto(mensajeCorregido, inventarioRelevante);
             return {
               respuesta: resultadoFoto.respuestaLimpia,
               intencionDetectada: intencion,
@@ -124,7 +163,7 @@ class Orchestrator extends BaseAgent {
       }
 
       // 5. Todo OK
-      const resultadoFoto = this.extraerEtiquetaFoto(respuestaPropuesta, inventarioDisponible);
+      const resultadoFoto = this.extraerEtiquetaFoto(respuestaPropuesta, inventarioRelevante);
       return {
         respuesta: resultadoFoto.respuestaLimpia,
         intencionDetectada: intencion,

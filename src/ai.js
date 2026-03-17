@@ -5,15 +5,9 @@ const Groq = require('groq-sdk');
 // Inicializar cliente Groq
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const Orchestrator = require('./agents/Orchestrator');
-const dbModule = require('./database'); // Importado para el Agente de Memoria cuando sea necesario
-
 // 1. Procesar mensaje del cliente (Ahora delegado al Orchestrator Multi-Agente)
-async function procesarMensaje(telefono, mensajeCliente, historialMensajes, inventarioDisponible, leadScore, contextoInventario = '') {
+async function procesarMensaje(telefono, mensajeCliente, historialMensajes, inventarioDisponible, leadScore, dbInsights = '') {
   try {
-    // Buscar insights previos (esto se podría hacer aquí o dentro del Agent de memoria)
-    // Usamos el contextoInventario como dbInsights para enriquecer al SalesAgent
-    const dbInsights = contextoInventario || '';
-    
     // El orquestador toma el control completo:
     const resultado = await Orchestrator.procesarMensaje(
       telefono,

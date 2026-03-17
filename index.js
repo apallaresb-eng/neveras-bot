@@ -12,104 +12,6 @@ const escalacion = require('./src/escalacion');
 const envios = require('./src/envios');
 const followup = require('./src/followup');
 const MarketingAgent = require('./src/agents/MarketingAgent');
-const { createClient } = require('@supabase/supabase-js');
-
-const supabase = createClient(
-	process.env.SUPABASE_URL,
-	process.env.SUPABASE_KEY
-);
-
-function inferirUsos(temperaturaMin, temperaturaMax, usoRecomendado) {
-	if (temperaturaMin == null || temperaturaMax == null) {
-		return usoRecomendado || 'Uso recomendado no especificado';
-	}
-
-	if (temperaturaMax <= -18) {
-		return 'Helados, carnes congeladas, pollos congelados';
-	}
-
-	if (temperaturaMax <= 4) {
-		return 'Carnes frescas, pescado fresco, mariscos, pollo';
-	}
-
-	if (temperaturaMax <= 6) {
-		return 'Lácteos, quesos, panadería, repostería';
-	}
-
-	if (temperaturaMax <= 8) {
-		return 'Bebidas (cerveza, gaseosa, agua), lácteos, flores';
-	}
-
-	return usoRecomendado || 'Uso recomendado no especificado';
-}
-
-function inferirCapacidadNecesaria(mensaje) {
-	const msg = String(mensaje || '').toLowerCase();
-	const matchCanastas = msg.match(/(\d+)\s*(canastas?|cajillas?|cajas?)\s*(de\s*)?(cerveza|gaseosa|refresco)?/);
-	if (matchCanastas) {
-		const cantidad = parseInt(matchCanastas[1], 10);
-		return cantidad * 20;
-	}
-
-	const matchLitros = msg.match(/(\d+)\s*litros?/);
-	if (matchLitros) {
-		return parseInt(matchLitros[1], 10);
-	}
-
-	const matchKilos = msg.match(/(\d+)\s*(kilos?|kg)/);
-	if (matchKilos) {
-		return parseInt(matchKilos[1], 10);
-	}
-
-	return null;
-}
-
-const obtenerContextoInventario = async (capacidadNecesaria = null) => {
-	try {
-		const { data: neveras, error } = await supabase
-			.from('neveras')
-			.select('id, nombre, tipo, capacidad_litros, precio, precio_minimo, temperatura_min, temperatura_max, uso_recomendado, descripcion, foto_url')
-			.eq('disponible', true);
-
-		console.log('Query inventario resultado:', {
-			error: error?.message,
-			cantidad: neveras?.length,
-			datos: JSON.stringify(neveras)
-		});
-
-		if (error || !neveras || neveras.length === 0) {
-			return 'INVENTARIO ACTUAL: No hay neveras disponibles en este momento.';
-		}
-
-		const lista = neveras.map((n) => {
-			const temp = (n.temperatura_min != null && n.temperatura_max != null)
-				? `${n.temperatura_min}°C a ${n.temperatura_max}°C`
-				: 'No especificada';
-			const precio = n.precio
-				? `$${Number(n.precio).toLocaleString('es-CO')} COP` : 'consultar';
-			const capacidad = n.capacidad_litros
-				? `${n.capacidad_litros} litros`
-				: 'capacidad no especificada';
-			const usoInferido = inferirUsos(n.temperatura_min, n.temperatura_max, n.uso_recomendado);
-			const precioMinimo = n.precio_minimo
-				? Number(n.precio_minimo).toLocaleString('es-CO')
-				: 'consultar';
-
-			return `[ID:${n.id}] ${n.nombre} | Tipo: ${n.tipo || 'N/A'} | ${capacidad} | Temperatura: ${temp} | Apto para: ${usoInferido} | Precio: ${precio} | Precio mínimo negociable (SOLO para Don Carlos, nunca decirlo al cliente): $${precioMinimo} COP`;
-		}).join('\n');
-
-		const contextoBase = `INVENTARIO ACTUAL DISPONIBLE (solo esto existe, no inventes más):\n${lista}`;
-		if (capacidadNecesaria) {
-			return `${contextoBase}\n\nIMPORTANTE: El cliente necesita aproximadamente ${capacidadNecesaria} litros.\nSolo recomendar neveras con capacidad_litros >= ${capacidadNecesaria}.\nSi ninguna tiene suficiente capacidad, decirlo honestamente.`;
-		}
-
-		return contextoBase;
-
-	} catch (err) {
-		console.error('Error obteniendo inventario para IA:', err);
-		return 'INVENTARIO ACTUAL: No se pudo consultar el stock en este momento.';
-	}
-};
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -538,17 +440,12 @@ app.post('/webhook', async (req, res) => {
 			return;
 		}
 
-		const capacidadNecesaria = inferirCapacidadNecesaria(datos.mensaje);
-		const contextoInventario = await obtenerContextoInventario(capacidadNecesaria);
-		console.log('Inventario para IA:', contextoInventario);
-
 		const { respuesta, intencionDetectada, fotoUrl } = await ai.procesarMensaje(
 			datos.telefono,
 			datos.mensaje,
 			historial,
 			inventario,
-			conversacion.lead_score,
-			contextoInventario
+			conversacion.lead_score
 		);
 
 		const nuevoScore = ai.calcularLeadScore(historial, intencionDetectada, conversacion.lead_score);
