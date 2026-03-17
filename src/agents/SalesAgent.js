@@ -5,6 +5,34 @@ class SalesAgent extends BaseAgent {
     super('AgenteCerrador', 'Especialista en ventas de refrigeración comercial colombiana con +40 años de experiencia técnica real');
   }
 
+  inferirUsos(temperaturaMin, temperaturaMax, usoRecomendado) {
+    if (temperaturaMin === null || temperaturaMin === undefined || temperaturaMax === null || temperaturaMax === undefined) {
+      return usoRecomendado || 'Consultar uso específico con el asesor';
+    }
+
+    if (temperaturaMax <= -18) {
+      return 'Helados, carnes congeladas, pollos congelados, pescado congelado';
+    }
+
+    if (temperaturaMin >= 0 && temperaturaMax <= 4) {
+      return 'Carnes frescas, pescado fresco, mariscos, pollo fresco, embutidos';
+    }
+
+    if (temperaturaMin >= 2 && temperaturaMax <= 6) {
+      return 'Lácteos, quesos, panadería, repostería, charcutería';
+    }
+
+    if (temperaturaMin >= 2 && temperaturaMax <= 8) {
+      return 'Bebidas (cerveza, gaseosa, agua, jugos), lácteos, flores, medicamentos';
+    }
+
+    if (temperaturaMin < 0 && temperaturaMax > -18) {
+      return 'Carnes semi-congeladas, mariscos, uso industrial mixto';
+    }
+
+    return 'Consultar uso específico con el asesor';
+  }
+
   async responderVenta(mensajeCliente, historial, inventarioDisponible, insights, leadScore, instruccionCorreccion = null) {
     const inventarioFormateado = this.formatearInventario(inventarioDisponible);
     const historialFormateado = this.formatearHistorial(historial);
@@ -134,6 +162,45 @@ ${inventarioFormateado}
 ${urgenciaTexto}
 
 ════════════════════════════════
+REGLAS DE RAZONAMIENTO TÉCNICO
+════════════════════════════════
+ANTES de recomendar cualquier nevera, razona así internamente:
+
+PASO 1 — Identificar el uso real del cliente:
+¿Qué va a guardar? Mapea mentalmente a la categoría correcta:
+- Bebidas (cerveza, gaseosa, agua, jugos, refrescos) → necesita 2°C a 8°C
+- Carnes frescas, pescado fresco, mariscos, pollo fresco → necesita 0°C a 4°C
+- Helados, carnes congeladas, pollos congelados → necesita -18°C a -25°C
+- Lácteos, quesos, panadería, repostería → necesita 2°C a 6°C
+- Flores → necesita 4°C a 8°C
+- Medicamentos, vacunas → necesita 2°C a 8°C
+- Frutas y verduras → necesita 4°C a 10°C
+
+PASO 2 — Filtrar inventario:
+De los equipos disponibles, ¿cuál tiene temperatura_min y temperatura_max
+que cubren el rango necesario para el uso del cliente?
+Un equipo ES apto si: su temperatura_min <= temperatura necesaria mínima
+Y su temperatura_max >= temperatura necesaria máxima.
+
+PASO 3 — Si NINGÚN equipo es apto:
+Decirlo honestamente: "Ahorita no tenemos un equipo que técnicamente
+le sirva para [uso]. Lo que tenemos es [descripción real]. Si me deja
+su dato lo llamo apenas llegue algo adecuado."
+NUNCA recomendar un equipo inadecuado aunque esté en inventario.
+
+PASO 4 — Negociación de precio:
+Si el cliente dice que está caro o pide rebaja:
+- Puedes ceder hasta el precio_minimo del inventario
+- NUNCA mencionar el precio_minimo directamente al cliente
+- Usar frases como "déjeme ver qué puedo hacer" o "le puedo ajustar un poquito"
+- Si el cliente pide por debajo del precio_minimo: escalar al vendedor humano
+
+PASO 5 — Datos inventados PROHIBIDOS:
+Si un dato no está en el inventario (temperatura, capacidad, garantía
+distinta a 4 meses, financiación), NO inventarlo ni asumirlo.
+Decir: "Ese dato lo verifico con bodega y le confirmo."
+
+════════════════════════════════
 INSIGHTS ACUMULADOS DE CLIENTES
 ════════════════════════════════
 ${insights || "Acumulando datos de conversaciones..."}
@@ -145,7 +212,7 @@ ${bloqueCorreccion}`;
       { role: 'user', content: mensajeCliente }
     ];
 
-    return await this.razonar(messages, 0.65, 1400);
+    return await this.razonar(messages, 0.5, 1400);
   }
 
   formatearInventario(neveras) {
@@ -156,16 +223,29 @@ ${bloqueCorreccion}`;
 
     return items.map(n => {
       const precio = n.precio.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-      const vecesVista = n.vistas_hoy || Math.floor(Math.random() * 4) + 1;
+      const precioMinimo = (n.precio_minimo !== null && n.precio_minimo !== undefined)
+        ? n.precio_minimo.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+        : 'no definido';
+      const capacidad = (n.capacidad_litros !== null && n.capacidad_litros !== undefined)
+        ? `${n.capacidad_litros}L`
+        : 'no especificada';
+      const tempMin = (n.temperatura_min !== null && n.temperatura_min !== undefined)
+        ? `${n.temperatura_min}°C`
+        : 'no definida';
+      const tempMax = (n.temperatura_max !== null && n.temperatura_max !== undefined)
+        ? `${n.temperatura_max}°C`
+        : 'no definida';
+      const aptoPara = this.inferirUsos(n.temperatura_min, n.temperatura_max, n.uso_recomendado);
       return [
         `• [ID:${n.id}]`,
         `Equipo: ${n.nombre}`,
         `Tipo: ${n.tipo}`,
         `Precio: $${precio} COP`,
-        `Capacidad real: ${n.capacidad_litros ? n.capacidad_litros + 'L' : 'no especificada'}`,
-        `Para: ${n.uso_recomendado || 'uso general'}`,
-        `Specs: ${n.especificaciones || 'pendiente de confirmar'}`,
-        `(${vecesVista} personas lo consultaron hoy)`
+        `Precio mínimo negociable: $${precioMinimo} COP (SOLO INTERNO, NUNCA DECIRLO AL CLIENTE)`,
+        `Capacidad: ${capacidad}`,
+        `Temperatura de operación: ${tempMin} a ${tempMax}`,
+        `Apto para: ${aptoPara}`,
+        `Especificaciones: ${n.especificaciones || 'pendiente de confirmar'}`
       ].join(' | ');
     }).join('\n');
   }
