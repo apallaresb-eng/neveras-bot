@@ -163,19 +163,40 @@ NO incluyas saludos ni comillas Markdown. Tu salida debe ser 100% parseable con 
 	}
 }
 
-const CAMPOS_CRITICOS = ['precio', 'precio_minimo', 'temperatura_min', 'temperatura_max', 'tipo', 'nombre'];
+const CAMPOS_CRITICOS = ['nombre', 'precio', 'precio_minimo', 'temperatura_min', 'temperatura_max', 'tipo', 'capacidad_litros', 'uso_recomendado'];
 
 const MENSAJES_CAMPOS = {
+	nombre: '¿Cuál es la marca y modelo? Ejemplo: Haceb exhibidora, Imbera G319',
 	precio: '¿Cuánto vale esta nevera? (precio de venta en pesos)',
 	precio_minimo: '¿Cuál es el mínimo al que la dejaría? (para negociar con el cliente)',
 	temperatura_min: '¿A qué temperatura mínima llega? Ejemplo: -20 para congelador, 2 para exhibidora',
 	temperatura_max: '¿Cuál es la temperatura máxima? Ejemplo: -18 para congelador, 8 para exhibidora',
 	tipo: '¿Qué tipo es? Responde: exhibidora, vertical, horizontal, congelador o vitrina',
-	nombre: '¿Cuál es la marca y modelo? Ejemplo: Haceb exhibidora, Imbera G319'
+	capacidad_litros: '¿Cuántos litros tiene? (capacidad aproximada, ej: 400, 600, 300)',
+	uso_recomendado: '¿Para qué tipo de negocio es ideal? (ej: Carnicería, Restaurante, Panadería, Tienda)'
 };
 
 function checkCamposFaltantes(datos) {
-	return CAMPOS_CRITICOS.filter((campo) => datos[campo] === null || datos[campo] === undefined);
+	const tiposValidos = ['exhibidora', 'vertical', 'horizontal', 'congelador', 'vitrina'];
+	return CAMPOS_CRITICOS.filter((campo) => {
+		const v = campo === 'uso_recomendado' ? (datos.uso_recomendado ?? datos.usoRecomendado) : datos[campo];
+		switch (campo) {
+			case 'nombre':
+			case 'uso_recomendado':
+				return v === null || v === undefined || v === '';
+			case 'precio':
+			case 'precio_minimo':
+				return v === null || v === undefined || v === 0;
+			case 'temperatura_min':
+			case 'temperatura_max':
+			case 'capacidad_litros':
+				return v === null || v === undefined;
+			case 'tipo':
+				return v === null || v === undefined || !tiposValidos.includes(v);
+			default:
+				return v === null || v === undefined;
+		}
+	});
 }
 
 async function preguntarCampoFaltante(chatId, campo) {
@@ -184,12 +205,14 @@ async function preguntarCampoFaltante(chatId, campo) {
 
 async function extraerValorCampoDeTexto(campo, respuesta) {
 	const instrucciones = {
+		nombre: `El vendedor respondió: "${respuesta}". Extrae la marca y modelo de la nevera (ej: "Haceb exhibidora", "Imbera G319"). Responde SOLO con el nombre corto o null.`,
 		precio: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE el precio como número entero en pesos colombianos sin puntos ni letras. Si dice tres millones devuelve 3000000. Responde SOLO con el número entero o null.`,
 		precio_minimo: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE el precio mínimo como número entero en pesos colombianos. Responde SOLO con el número entero o null.`,
 		temperatura_min: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE la temperatura mínima como número entero en grados Celsius (puede ser negativo, ej: -20). Responde SOLO con el número entero o null.`,
 		temperatura_max: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE la temperatura máxima como número entero en grados Celsius (puede ser negativo). Responde SOLO con el número entero o null.`,
 		tipo: `El vendedor respondió: "${respuesta}". Determina el tipo de nevera. Debe ser exactamente una de: exhibidora, vertical, horizontal, congelador, vitrina. Responde SOLO esa palabra o null.`,
-		nombre: `El vendedor respondió: "${respuesta}". Extrae la marca y modelo de la nevera (ej: "Haceb exhibidora", "Imbera G319"). Responde SOLO con el nombre corto o null.`
+		capacidad_litros: `El vendedor respondió: "${respuesta}". Extrae ÚNICAMENTE la capacidad en litros como número entero (ej: 400, 600, 300). Responde SOLO con el número entero o null.`,
+		uso_recomendado: `El vendedor respondió: "${respuesta}". Extrae el tipo de negocio ideal para esta nevera (ej: Carnicería, Restaurante, Panadería, Tienda). Responde SOLO con el texto corto o null.`
 	};
 	try {
 		const completion = await groq.chat.completions.create({
@@ -203,7 +226,7 @@ async function extraerValorCampoDeTexto(campo, respuesta) {
 		});
 		const raw = (completion.choices[0]?.message?.content || '').trim();
 		if (raw.toLowerCase() === 'null' || raw === '') return null;
-		if (['precio', 'precio_minimo', 'temperatura_min', 'temperatura_max'].includes(campo)) {
+		if (['precio', 'precio_minimo', 'temperatura_min', 'temperatura_max', 'capacidad_litros'].includes(campo)) {
 			const num = parseInt(raw.replace(/[^-\d]/g, ''), 10);
 			return Number.isNaN(num) ? null : num;
 		}
@@ -249,6 +272,9 @@ async function procesarRespuestaCampo(chatId, respuesta, estado) {
 		return;
 	}
 	estado.datos[campo] = valor;
+	// Keep camelCase aliases in sync for guardarNeveraEnBD
+	if (campo === 'capacidad_litros') estado.datos.capacidadLitros = valor;
+	if (campo === 'uso_recomendado') estado.datos.usoRecomendado = valor;
 	estado.campoActual++;
 	if (estado.campoActual < estado.camposFaltantes.length) {
 		const siguienteCampo = estado.camposFaltantes[estado.campoActual];
@@ -556,7 +582,32 @@ async function iniciarBot(dbModule) {
 					estado.datos.precio ? `precio: ${estado.datos.precio}` : '',
 					estado.datos.tipo ? `tipo: ${estado.datos.tipo}` : ''
 				].filter(Boolean).join('. ');
-				await procesarDescripcionLibre(senderChatId, texto, textoAnterior);
+				const textoFinal = `DESCRIPCION ANTERIOR: "${textoAnterior}"\nCOMPLEMENTO DEL DUENO: "${texto}"\nCombina y corrige la informacion anterior con el complemento. Prioriza los datos mas recientes.`;
+				const datosNuevos = await estructurarDescripcionConIA(textoFinal);
+				if (!datosNuevos) {
+					await botInstance.sendMessage(senderChatId, '❌ No pude procesar la corrección. Intenta de nuevo.');
+					return;
+				}
+				// Merge: solo sobreescribir si el nuevo valor es válido (no null, no 0, no vacío)
+				const esValorValido = (v) => v !== null && v !== undefined && v !== 0 && v !== '';
+				for (const [key, val] of Object.entries(datosNuevos)) {
+					if (esValorValido(val)) estado.datos[key] = val;
+				}
+				// Sync camelCase aliases
+				if (esValorValido(datosNuevos.uso_recomendado)) estado.datos.usoRecomendado = datosNuevos.uso_recomendado;
+				if (esValorValido(datosNuevos.capacidad_litros)) estado.datos.capacidadLitros = datosNuevos.capacidad_litros;
+				const faltantes = checkCamposFaltantes(estado.datos);
+				if (faltantes.length > 0) {
+					estado.paso = 'completando_campos';
+					estado.camposFaltantes = faltantes;
+					estado.campoActual = 0;
+					estadosConversacion.set(senderChatId, estado);
+					await botInstance.sendMessage(senderChatId, `⚠️ Aún faltan ${faltantes.length} dato(s). Responde una por una:`);
+					await preguntarCampoFaltante(senderChatId, faltantes[0]);
+				} else {
+					estadosConversacion.set(senderChatId, estado);
+					await mostrarResumenConfirmacion(senderChatId);
+				}
 				return;
 			}
 
